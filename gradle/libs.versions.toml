@@ -1,0 +1,53 @@
+[versions]
+springBoot = "3.3.5"
+springDependencyManagement = "1.1.6"
+openapiGenerator = "7.9.0"
+slf4j = "2.0.16"
+jakartaValidation = "3.1.0"
+junitJupiter = "5.11.3"
+junitPlatformLauncher = "1.11.3"
+jacksonNullable = "0.2.6"
+swaggerAnnotations = "2.2.22"
+jakartaAnnotation = "2.1.1"
+springContext = "6.1.14"
+jakartaServlet = "6.0.0"
+mapstruct = "1.6.3"
+lombok = "1.18.34"
+testcontainers = "1.20.4"
+flyway = "11.17.2"
+
+[libraries]
+springBom = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
+slf4jApi = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+jakartaValidationApi = { module = "jakarta.validation:jakarta.validation-api", version.ref = "jakartaValidation" }
+junitJupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junitJupiter" }
+junitPlatformLauncher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junitPlatformLauncher" }
+springWeb = { module = "org.springframework:spring-web" }
+springContext = { module = "org.springframework:spring-context", version.ref = "springContext" }
+springJdbc = { module = "org.springframework:spring-jdbc" }
+flywayCore = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
+flywayDatabasePostgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+jacksonDatabind = { module = "com.fasterxml.jackson.core:jackson-databind" }
+jacksonCore = { module = "com.fasterxml.jackson.core:jackson-core" }
+springBootStarterWeb = { module = "org.springframework.boot:spring-boot-starter-web" }
+springBootStarterActuator = { module = "org.springframework.boot:spring-boot-starter-actuator" }
+springBootStarterValidation = { module = "org.springframework.boot:spring-boot-starter-validation" }
+springBootStarterJdbc = { module = "org.springframework.boot:spring-boot-starter-jdbc" }
+springBootStarterDataJdbc = { module = "org.springframework.boot:spring-boot-starter-data-jdbc" }
+springBootStarterTest = { module = "org.springframework.boot:spring-boot-starter-test" }
+openapiJacksonNullable = { module = "org.openapitools:jackson-databind-nullable", version.ref = "jacksonNullable" }
+swaggerAnnotations = { module = "io.swagger.core.v3:swagger-annotations", version.ref = "swaggerAnnotations" }
+jakartaAnnotationApi = { module = "jakarta.annotation:jakarta.annotation-api", version.ref = "jakartaAnnotation" }
+jakartaServletApi = { module = "jakarta.servlet:jakarta.servlet-api", version.ref = "jakartaServlet" }
+mapstruct = { module = "org.mapstruct:mapstruct", version.ref = "mapstruct" }
+mapstructProcessor = { module = "org.mapstruct:mapstruct-processor", version.ref = "mapstruct" }
+lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
+postgresql = { module = "org.postgresql:postgresql", version = "42.7.7" }
+testcontainersBom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
+testcontainersJunit = { module = "org.testcontainers:junit-jupiter" }
+testcontainersPostgres = { module = "org.testcontainers:postgresql" }
+
+[plugins]
+springBoot = { id = "org.springframework.boot", version.ref = "springBoot" }
+springDependencyManagement = { id = "io.spring.dependency-management", version.ref = "springDependencyManagement" }
+openapiGenerator = { id = "org.openapi.generator", version.ref = "openapiGenerator" }

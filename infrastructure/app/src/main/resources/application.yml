@@ -1,0 +1,23 @@
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,info,metrics"
+
+spring:
+  kafka:
+    bootstrap-servers: ${APP_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+  datasource:
+    url: ${APP_DB_URL:jdbc:postgresql://localhost:5432/appdb}
+    username: ${APP_DB_USERNAME:appuser}
+    password: ${APP_DB_PASSWORD:apppass}
+    driver-class-name: org.postgresql.Driver
+  flyway:
+    enabled: true
+    locations: classpath:db/migrations
+    ignore-migration-patterns: "*:missing,*:future"
+
+app:
+  kafka:
+    topic:
+      item-events: ${APP_KAFKA_TOPIC_ITEM_EVENTS:service.item.events.v1}
