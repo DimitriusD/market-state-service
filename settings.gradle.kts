@@ -1,4 +1,4 @@
-rootProject.name = "hexagonal-service-template"
+rootProject.name = "market-state-service"
 
 pluginManagement {
     repositories {
@@ -9,6 +9,4 @@ pluginManagement {
 
 include(":application")
 include(":infrastructure:app")
-include(":infrastructure:rest-api")
-include(":infrastructure:jdbc-storage-adapter")
-include(":infrastructure:event-adapter")
+include(":infrastructure:kafka-adapter")

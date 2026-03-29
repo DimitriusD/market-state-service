@@ -1,9 +1,0 @@
-type: object
-properties:
-  error:
-    type: string
-  message:
-    type: string
-  timestamp:
-    type: string
-    format: date-time

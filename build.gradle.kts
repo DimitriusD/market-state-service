@@ -1,7 +1,7 @@
 import org.gradle.api.plugins.JavaPlugin
 import org.gradle.api.plugins.JavaPluginExtension
 
-group = "com.company"
+group = "com.trading"
 version = "0.1.0-SNAPSHOT"
 
 allprojects {

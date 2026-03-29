@@ -6,16 +6,11 @@ plugins {
 
 dependencies {
     implementation(project(":application"))
-    implementation(project(":infrastructure:rest-api"))
-    implementation(project(":infrastructure:jdbc-storage-adapter"))
-    implementation(project(":infrastructure:event-adapter"))
-    implementation(libs.springBootStarterWeb)
+    implementation(project(":infrastructure:kafka-adapter"))
     implementation("org.springframework.kafka:spring-kafka")
     implementation(libs.springBootStarterActuator)
-    implementation(libs.springBootStarterValidation)
-    implementation(libs.springBootStarterDataJdbc)
-    implementation(libs.flywayCore)
-    implementation(libs.flywayDatabasePostgresql)
+    implementation(libs.jacksonDatabind)
+    implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
 
     compileOnly(libs.lombok)
 
@@ -23,10 +18,6 @@ dependencies {
     annotationProcessor(libs.mapstructProcessor)
 
     testImplementation(libs.springBootStarterTest)
-    testImplementation(libs.springBootStarterDataJdbc)
-    testImplementation(platform(libs.testcontainersBom))
-    testImplementation(libs.testcontainersJunit)
-    testImplementation(libs.testcontainersPostgres)
 
     testRuntimeOnly(libs.junitPlatformLauncher)
 }
