@@ -25,7 +25,6 @@ echo "  Group        : $GROUP"
 echo "  Base package : $BASE_PACKAGE"
 echo ""
 
-# Step 1: Rename package directories
 echo "[1/4] Renaming package directories..."
 
 find "$ROOT" -type d -path "*src/main/java/$OLD_PACKAGE_PATH" -o -path "*src/test/java/$OLD_PACKAGE_PATH" | while read -r old_dir; do
@@ -33,13 +32,11 @@ find "$ROOT" -type d -path "*src/main/java/$OLD_PACKAGE_PATH" -o -path "*src/tes
     new_dir="$java_root/$NEW_PACKAGE_PATH"
     mkdir -p "$(dirname "$new_dir")"
     mv "$old_dir" "$new_dir"
-    # Clean up empty dirs
     old_top="$java_root/$(echo "$OLD_PACKAGE_PATH" | cut -d'/' -f1)"
     find "$old_top" -type d -empty -delete 2>/dev/null || true
     rmdir "$old_top" 2>/dev/null || true
 done
 
-# Step 2: Replace in all source files
 echo "[2/4] Replacing package names in source files..."
 
 find "$ROOT" \( -name "*.java" -o -name "*.kts" -o -name "*.yml" -o -name "*.yaml" \
@@ -56,7 +53,6 @@ find "$ROOT" \( -name "*.java" -o -name "*.kts" -o -name "*.yml" -o -name "*.yam
     fi
 done
 
-# Step 3: Update docker-compose defaults
 echo "[3/4] Updating Docker container names..."
 
 SHORT_NAME="$(echo "$PROJECT_NAME" | sed 's/-service$//' | tr -d '-')"
@@ -71,7 +67,6 @@ if [ -f "$ROOT/docker-compose.yml" ]; then
     echo "  Updated: docker-compose.yml"
 fi
 
-# Step 4: Update application.yml defaults
 echo "[4/4] Updating application.yml defaults..."
 
 APP_YML="$ROOT/infrastructure/app/src/main/resources/application.yml"

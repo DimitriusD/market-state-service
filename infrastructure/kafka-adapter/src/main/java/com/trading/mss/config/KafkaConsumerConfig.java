@@ -1,6 +1,7 @@
-package com.trading.mss.consumer;
+package com.trading.mss.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trading.mss.consumer.DepthDiffConsumer;
 import com.trading.mss.message.inbound.DepthDiffEvent;
 import com.trading.mss.port.input.ProcessDepthDiffUseCase;
 import org.apache.kafka.clients.consumer.ConsumerConfig;

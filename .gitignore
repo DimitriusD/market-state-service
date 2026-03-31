@@ -1,9 +1,7 @@
-# Gradle
 .gradle/
 build/
 !gradle/wrapper/gradle-wrapper.jar
 
-# IDE
 .idea/
 *.iml
 *.ipr
@@ -15,10 +13,8 @@ build/
 .factorypath
 out/
 
-# OS
 .DS_Store
 Thumbs.db
 
-# Environment
 .env
 *.env.local

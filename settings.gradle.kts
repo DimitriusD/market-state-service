@@ -10,3 +10,4 @@ pluginManagement {
 include(":application")
 include(":infrastructure:app")
 include(":infrastructure:kafka-adapter")
+include(":infrastructure:binance-snapshot-adapter")

@@ -25,7 +25,6 @@ Write-Host "  Group        : $Group"
 Write-Host "  Base package : $BasePackage"
 Write-Host ""
 
-# Step 1: Rename directories (bottom-up to avoid path conflicts)
 Write-Host "[1/4] Renaming package directories..." -ForegroundColor Yellow
 
 $javaRoots = Get-ChildItem -Path $root -Recurse -Directory -Filter "java" |
@@ -40,7 +39,6 @@ foreach ($javaRoot in $javaRoots) {
             New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
         }
         Move-Item -Path $oldDir -Destination $newDir -Force
-        # Clean up empty parent dirs from old path
         $cleanup = Join-Path $javaRoot.FullName ($oldPackagePath.Split('/')[0])
         if (Test-Path $cleanup) {
             Remove-Item -Path $cleanup -Recurse -Force -ErrorAction SilentlyContinue
@@ -48,7 +46,6 @@ foreach ($javaRoot in $javaRoots) {
     }
 }
 
-# Step 2: Replace in all source files
 Write-Host "[2/4] Replacing package names in source files..." -ForegroundColor Yellow
 
 $extensions = @("*.java", "*.kts", "*.yml", "*.yaml", "*.xml", "*.toml", "*.properties", "*.md")
@@ -72,7 +69,6 @@ foreach ($file in $files) {
     }
 }
 
-# Step 3: Update docker-compose container names
 Write-Host "[3/4] Updating Docker container names..." -ForegroundColor Yellow
 
 $dcFile = Join-Path $root "docker-compose.yml"
@@ -86,7 +82,6 @@ if (Test-Path $dcFile) {
     Write-Host "  Updated: docker-compose.yml" -ForegroundColor Gray
 }
 
-# Step 4: Update application.yml defaults
 Write-Host "[4/4] Updating application.yml defaults..." -ForegroundColor Yellow
 
 $appYml = Join-Path $root "infrastructure/app/src/main/resources/application.yml"
