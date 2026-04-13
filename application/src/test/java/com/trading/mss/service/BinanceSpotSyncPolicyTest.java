@@ -2,8 +2,8 @@ package com.trading.mss.service;
 
 import com.trading.mss.domain.model.SyncDecision;
 import com.trading.mss.domain.model.SymbolState;
-import com.trading.mss.message.inbound.DepthDiffEvent;
-import com.trading.mss.message.inbound.Metadata;
+import com.trading.mss.dto.market.DepthDiffDto;
+import com.trading.mss.dto.common.MetadataDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -149,11 +149,11 @@ class BinanceSpotSyncPolicyTest {
         return state;
     }
 
-    private DepthDiffEvent event(long firstUpdateId, long finalUpdateId) {
-        var metadata = new Metadata(1, "depthDiff", "binance", "spot",
+    private DepthDiffDto event(long firstUpdateId, long finalUpdateId) {
+        var metadata = new MetadataDto(1, "depthDiff", "binance", "spot",
                 "BTC", "USDT", "BTCUSDT", "BTCUSDT", "evt-1", "stream-1",
                 System.currentTimeMillis(), System.currentTimeMillis(), System.currentTimeMillis());
-        return new DepthDiffEvent(metadata, System.currentTimeMillis(),
+        return new DepthDiffDto(metadata, System.currentTimeMillis(),
                 firstUpdateId, finalUpdateId, null, List.of(), List.of());
     }
 }

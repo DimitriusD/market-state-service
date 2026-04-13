@@ -1,9 +1,9 @@
 package com.trading.mss.port.input;
 
-import com.trading.mss.message.inbound.DepthDiffEvent;
-import com.trading.mss.message.inbound.KafkaMessageContext;
+import com.trading.mss.dto.market.DepthDiffDto;
+import com.trading.mss.dto.KafkaMessageContext;
 
 public interface ProcessDepthDiffUseCase {
 
-    void process(DepthDiffEvent event, KafkaMessageContext context);
+    void process(DepthDiffDto event, KafkaMessageContext context);
 }

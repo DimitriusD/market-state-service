@@ -3,21 +3,16 @@ package com.trading.mss.config;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.trading.mss.api.BinanceSpotSnapshotApiServiceImpl;
 import com.trading.mss.mapper.BboStateMapper;
-import com.trading.mss.mapper.OrderBookTopNStateMapper;
+import com.trading.mss.mapper.OrderBookDepthStateMapper;
 import com.trading.mss.port.input.ProcessDepthDiffUseCase;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
 import com.trading.mss.port.output.PublishBboStatePort;
-import com.trading.mss.port.output.PublishOrderBookTopNStatePort;
+import com.trading.mss.port.output.PublishOrderBookDepthStatePort;
 import com.trading.mss.port.output.SymbolStateStorePort;
-import com.trading.mss.service.BinanceSpotSyncPolicy;
-import com.trading.mss.service.DepthDiffBootstrapService;
-import com.trading.mss.service.LiveOrderBookUpdateService;
-import com.trading.mss.service.MarketStatePublisher;
-import com.trading.mss.service.OrderBookApplier;
-import com.trading.mss.service.ProcessDepthDiffService;
-import com.trading.mss.service.SymbolStateLifecycleService;
-import com.trading.mss.api.BinanceSpotSnapshotApiServiceImpl;
+import com.trading.mss.service.*;
+import com.trading.mss.service.handler.*;
 import com.trading.mss.store.InMemorySymbolStateStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -56,8 +51,8 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public OrderBookTopNStateMapper orderBookTopNStateMapper() {
-        return new OrderBookTopNStateMapper();
+    public OrderBookDepthStateMapper orderBookDepthStateMapper() {
+        return new OrderBookDepthStateMapper();
     }
 
     @Bean
@@ -81,16 +76,16 @@ public class InfrastructureConfig {
     @Bean
     public MarketStatePublisher marketStatePublisher(
             BboStateMapper bboStateMapper,
-            OrderBookTopNStateMapper orderBookTopNStateMapper,
+            OrderBookDepthStateMapper orderBookDepthStateMapper,
             PublishBboStatePort publishBboStatePort,
-            PublishOrderBookTopNStatePort publishOrderBookTopNStatePort,
-            @Value("${app.market-state.publish.topn-depth:10}") int topNDepth) {
+            PublishOrderBookDepthStatePort publishOrderBookDepthStatePort,
+            @Value("${app.market-state.publish.topn-depth:10}") int publishedLevels) {
         return new MarketStatePublisher(
                 bboStateMapper,
-                orderBookTopNStateMapper,
+                orderBookDepthStateMapper,
                 publishBboStatePort,
-                publishOrderBookTopNStatePort,
-                topNDepth);
+                publishOrderBookDepthStatePort,
+                publishedLevels);
     }
 
     @Bean
@@ -128,17 +123,38 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public ProcessDepthDiffUseCase processDepthDiff(
-            SymbolStateStorePort symbolStateStore,
+    public DepthDiffBufferService depthDiffBufferService(
+            SymbolStateLifecycleService symbolStateLifecycleService,
+            @Value("${app.state.max-buffered-events:10000}") int maxBufferedEvents) {
+        return new DepthDiffBufferService(symbolStateLifecycleService, maxBufferedEvents);
+    }
+
+    @Bean
+    public DepthDiffStateHandlerRegistry depthDiffStateHandlerRegistry(
+            DepthDiffBufferService depthDiffBufferService,
             DepthDiffBootstrapService depthDiffBootstrapService,
             LiveOrderBookUpdateService liveOrderBookUpdateService,
             SymbolStateLifecycleService symbolStateLifecycleService,
-            @Value("${app.state.max-buffered-events:10000}") int maxBufferedEvents) {
-        return new ProcessDepthDiffService(
-                symbolStateStore,
-                depthDiffBootstrapService,
-                liveOrderBookUpdateService,
-                symbolStateLifecycleService,
-                maxBufferedEvents);
+            SymbolStateStorePort symbolStateStore) {
+        BootstrapPhaseStateHandler bootstrapPhaseHandler =
+                new BootstrapPhaseStateHandler(depthDiffBufferService, symbolStateStore);
+
+        DepthDiffStateHandlerRegistry registry = new DepthDiffStateHandlerRegistry(java.util.List.of(
+                new InitDepthDiffStateHandler(depthDiffBufferService, depthDiffBootstrapService),
+                new BufferingDiffsStateHandler(depthDiffBufferService, depthDiffBootstrapService),
+                bootstrapPhaseHandler,
+                new LiveDepthDiffStateHandler(liveOrderBookUpdateService),
+                new ResyncingDepthDiffStateHandler(depthDiffBufferService, depthDiffBootstrapService, symbolStateLifecycleService)
+        ));
+        registry.registerAdditionalStatus(
+                com.trading.mss.domain.model.SymbolStateStatus.APPLYING_BUFFER, bootstrapPhaseHandler);
+        return registry;
+    }
+
+    @Bean
+    public ProcessDepthDiffUseCase processDepthDiff(
+            SymbolStateStorePort symbolStateStore,
+            DepthDiffStateHandlerRegistry depthDiffStateHandlerRegistry) {
+        return new ProcessDepthDiffService(symbolStateStore, depthDiffStateHandlerRegistry);
     }
 }

@@ -4,7 +4,8 @@ import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.ScaledDecimal;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
-import com.trading.mss.message.outbound.BboStateEvent;
+import com.trading.mss.dto.orderbook.BboStateDto;
+import com.trading.mss.dto.orderbook.BookSyncStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -30,10 +31,10 @@ class BboStateMapperTest {
         book.getAsks().put(ScaledDecimal.parse("50001.00"), ScaledDecimal.parse("0.75000000"));
         book.getAsks().put(ScaledDecimal.parse("50002.00"), ScaledDecimal.parse("1.00000000"));
 
-        Optional<BboStateEvent> result = mapper.project(state);
+        Optional<BboStateDto> result = mapper.project(state);
 
         assertTrue(result.isPresent());
-        BboStateEvent event = result.get();
+        BboStateDto event = result.get();
         assertEquals("50000.00000000", event.bestBid().price());
         assertEquals("1.50000000", event.bestBid().qty());
         assertEquals("50001.00000000", event.bestAsk().price());
@@ -46,7 +47,7 @@ class BboStateMapperTest {
         state.getOrderBook().getBids().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.0"));
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50001.00"), ScaledDecimal.parse("1.0"));
 
-        BboStateEvent event = mapper.project(state).orElseThrow();
+        BboStateDto event = mapper.project(state).orElseThrow();
 
         assertEquals("1.00000000", event.spread());
     }
@@ -57,7 +58,7 @@ class BboStateMapperTest {
         state.getOrderBook().getBids().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.0"));
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50002.00"), ScaledDecimal.parse("1.0"));
 
-        BboStateEvent event = mapper.project(state).orElseThrow();
+        BboStateDto event = mapper.project(state).orElseThrow();
 
         assertEquals("50001.00000000", event.mid());
     }
@@ -68,7 +69,7 @@ class BboStateMapperTest {
         state.getOrderBook().getBids().put(ScaledDecimal.parse("1.00000001"), ScaledDecimal.parse("1.0"));
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("1.00000002"), ScaledDecimal.parse("1.0"));
 
-        BboStateEvent event = mapper.project(state).orElseThrow();
+        BboStateDto event = mapper.project(state).orElseThrow();
 
         assertEquals("1.00000002", event.mid());
     }
@@ -78,7 +79,7 @@ class BboStateMapperTest {
         SymbolState state = liveState();
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50001.00"), ScaledDecimal.parse("1.0"));
 
-        Optional<BboStateEvent> result = mapper.project(state);
+        Optional<BboStateDto> result = mapper.project(state);
 
         assertTrue(result.isEmpty());
     }
@@ -88,7 +89,7 @@ class BboStateMapperTest {
         SymbolState state = liveState();
         state.getOrderBook().getBids().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.0"));
 
-        Optional<BboStateEvent> result = mapper.project(state);
+        Optional<BboStateDto> result = mapper.project(state);
 
         assertTrue(result.isEmpty());
     }
@@ -97,7 +98,7 @@ class BboStateMapperTest {
     void returnsEmptyWhenBookEmpty() {
         SymbolState state = liveState();
 
-        Optional<BboStateEvent> result = mapper.project(state);
+        Optional<BboStateDto> result = mapper.project(state);
 
         assertTrue(result.isEmpty());
     }
@@ -120,7 +121,7 @@ class BboStateMapperTest {
         state.setLastEventProcessedTs(2000L);
         state.setLocalUpdateId(42);
 
-        BboStateEvent event = mapper.project(state).orElseThrow();
+        BboStateDto event = mapper.project(state).orElseThrow();
 
         assertEquals(1, event.metadata().schemaVersion());
         assertEquals("bbo_state", event.metadata().eventType());
@@ -129,19 +130,34 @@ class BboStateMapperTest {
         assertEquals("BTCUSDT", event.metadata().symbol());
         assertEquals("BTCUSDT", event.metadata().instrumentId());
         assertEquals(1000L, event.metadata().exchangeTs());
+        assertEquals(0L, event.metadata().receivedTs());
         assertEquals(2000L, event.metadata().processedTs());
-        assertEquals(42, event.metadata().localUpdateId());
+        assertEquals("42", event.metadata().eventId());
+        assertEquals("mss", event.metadata().sourceStream());
+        assertEquals("BTC", event.metadata().base());
+        assertEquals("USDT", event.metadata().quote());
     }
 
     @Test
-    void trustedFlagIsPreserved() {
+    void syncStatusInSyncWhenTrusted() {
         SymbolState state = liveState();
         state.getOrderBook().getBids().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.0"));
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50001.00"), ScaledDecimal.parse("1.0"));
         state.setTrusted(true);
 
-        BboStateEvent event = mapper.project(state).orElseThrow();
-        assertTrue(event.trusted());
+        BboStateDto event = mapper.project(state).orElseThrow();
+        assertEquals(BookSyncStatus.IN_SYNC, event.syncStatus());
+    }
+
+    @Test
+    void syncStatusOutOfSyncWhenUntrusted() {
+        SymbolState state = liveState();
+        state.getOrderBook().getBids().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.0"));
+        state.getOrderBook().getAsks().put(ScaledDecimal.parse("50001.00"), ScaledDecimal.parse("1.0"));
+        state.setTrusted(false);
+
+        BboStateDto event = mapper.project(state).orElseThrow();
+        assertEquals(BookSyncStatus.OUT_OF_SYNC, event.syncStatus());
     }
 
     @Test
@@ -150,7 +166,7 @@ class BboStateMapperTest {
         state.getOrderBook().getBids().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.0"));
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.0"));
 
-        BboStateEvent event = mapper.project(state).orElseThrow();
+        BboStateDto event = mapper.project(state).orElseThrow();
 
         assertEquals("0.00000000", event.spread());
         assertEquals("50000.00000000", event.mid());
@@ -161,6 +177,8 @@ class BboStateMapperTest {
         state.setStatus(SymbolStateStatus.LIVE);
         state.setTrusted(true);
         state.setMarketType("spot");
+        state.setBase("BTC");
+        state.setQuote("USDT");
         state.setInstrumentId("BTCUSDT");
         return state;
     }

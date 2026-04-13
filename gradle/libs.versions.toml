@@ -15,6 +15,7 @@ mapstruct = "1.6.3"
 lombok = "1.18.34"
 testcontainers = "1.20.4"
 flyway = "11.17.2"
+confluent = "7.7.0"
 
 [libraries]
 springBom = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "springBoot" }
@@ -46,6 +47,9 @@ postgresql = { module = "org.postgresql:postgresql", version = "42.7.7" }
 testcontainersBom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
 testcontainersJunit = { module = "org.testcontainers:junit-jupiter" }
 testcontainersPostgres = { module = "org.testcontainers:postgresql" }
+
+schemas = { module = "com.trading:trading-schemas", version = "1.0.0-SNAPSHOT" }
+kafkaAvroSerializer = { module = "io.confluent:kafka-avro-serializer", version.ref = "confluent" }
 
 [plugins]
 springBoot = { id = "org.springframework.boot", version.ref = "springBoot" }

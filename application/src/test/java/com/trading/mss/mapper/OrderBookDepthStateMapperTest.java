@@ -3,8 +3,9 @@ package com.trading.mss.mapper;
 import com.trading.mss.domain.model.ScaledDecimal;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
-import com.trading.mss.message.outbound.OrderBookTopNStateEvent;
-import com.trading.mss.message.outbound.ProjectedPriceLevel;
+import com.trading.mss.dto.common.PriceLevelDto;
+import com.trading.mss.dto.orderbook.BookSyncStatus;
+import com.trading.mss.dto.orderbook.OrderBookDepthStateDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -12,13 +13,13 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class OrderBookTopNStateMapperTest {
+class OrderBookDepthStateMapperTest {
 
-    private OrderBookTopNStateMapper mapper;
+    private OrderBookDepthStateMapper mapper;
 
     @BeforeEach
     void setUp() {
-        mapper = new OrderBookTopNStateMapper();
+        mapper = new OrderBookDepthStateMapper();
     }
 
     @Test
@@ -28,9 +29,9 @@ class OrderBookTopNStateMapperTest {
         state.getOrderBook().getBids().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("2.0"));
         state.getOrderBook().getBids().put(ScaledDecimal.parse("49998.00"), ScaledDecimal.parse("3.0"));
 
-        OrderBookTopNStateEvent event = mapper.project(state, 10);
+        OrderBookDepthStateDto event = mapper.project(state, 10);
 
-        List<ProjectedPriceLevel> bids = event.bids();
+        List<PriceLevelDto> bids = event.bidLevels();
         assertEquals(3, bids.size());
         assertEquals("50000.00000000", bids.get(0).price());
         assertEquals("49999.00000000", bids.get(1).price());
@@ -44,9 +45,9 @@ class OrderBookTopNStateMapperTest {
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50001.00"), ScaledDecimal.parse("2.0"));
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50003.00"), ScaledDecimal.parse("3.0"));
 
-        OrderBookTopNStateEvent event = mapper.project(state, 10);
+        OrderBookDepthStateDto event = mapper.project(state, 10);
 
-        List<ProjectedPriceLevel> asks = event.asks();
+        List<PriceLevelDto> asks = event.askLevels();
         assertEquals(3, asks.size());
         assertEquals("50001.00000000", asks.get(0).price());
         assertEquals("50002.00000000", asks.get(1).price());
@@ -61,38 +62,38 @@ class OrderBookTopNStateMapperTest {
             state.getOrderBook().getAsks().put(ScaledDecimal.parse(String.valueOf(50001 + i)), ScaledDecimal.parse("1.0"));
         }
 
-        OrderBookTopNStateEvent event = mapper.project(state, 5);
+        OrderBookDepthStateDto event = mapper.project(state, 5);
 
-        assertEquals(5, event.bids().size());
-        assertEquals(5, event.asks().size());
-        assertEquals("50000.00000000", event.bids().get(0).price());
-        assertEquals("49999.00000000", event.bids().get(1).price());
-        assertEquals("50001.00000000", event.asks().get(0).price());
-        assertEquals("50002.00000000", event.asks().get(1).price());
+        assertEquals(5, event.bidLevels().size());
+        assertEquals(5, event.askLevels().size());
+        assertEquals("50000.00000000", event.bidLevels().get(0).price());
+        assertEquals("49999.00000000", event.bidLevels().get(1).price());
+        assertEquals("50001.00000000", event.askLevels().get(0).price());
+        assertEquals("50002.00000000", event.askLevels().get(1).price());
     }
 
     @Test
-    void fewerLevelsThanDepth_takesAll() {
+    void fewerLevelsThanPublishedCap_listsActualCount() {
         SymbolState state = liveState();
         state.getOrderBook().getBids().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.0"));
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50001.00"), ScaledDecimal.parse("1.0"));
 
-        OrderBookTopNStateEvent event = mapper.project(state, 10);
+        OrderBookDepthStateDto event = mapper.project(state, 10);
 
-        assertEquals(1, event.bids().size());
-        assertEquals(1, event.asks().size());
-        assertEquals(10, event.depth());
+        assertEquals(1, event.bidLevels().size());
+        assertEquals(1, event.askLevels().size());
+        assertEquals(10, event.publishedLevels());
     }
 
     @Test
     void emptyBookReturnsEmptyLists() {
         SymbolState state = liveState();
 
-        OrderBookTopNStateEvent event = mapper.project(state, 5);
+        OrderBookDepthStateDto event = mapper.project(state, 5);
 
-        assertTrue(event.bids().isEmpty());
-        assertTrue(event.asks().isEmpty());
-        assertEquals(5, event.depth());
+        assertTrue(event.bidLevels().isEmpty());
+        assertTrue(event.askLevels().isEmpty());
+        assertEquals(5, event.publishedLevels());
     }
 
     @Test
@@ -100,10 +101,10 @@ class OrderBookTopNStateMapperTest {
         SymbolState state = liveState();
         state.getOrderBook().getBids().put(ScaledDecimal.parse("59827.95000000"), ScaledDecimal.parse("0.00551000"));
 
-        OrderBookTopNStateEvent event = mapper.project(state, 5);
+        OrderBookDepthStateDto event = mapper.project(state, 5);
 
-        assertEquals("59827.95000000", event.bids().get(0).price());
-        assertEquals("0.00551000", event.bids().get(0).qty());
+        assertEquals("59827.95000000", event.bidLevels().get(0).price());
+        assertEquals("0.00551000", event.bidLevels().get(0).qty());
     }
 
     @Test
@@ -113,27 +114,41 @@ class OrderBookTopNStateMapperTest {
         state.setLastEventProcessedTs(2000L);
         state.setLocalUpdateId(42);
 
-        OrderBookTopNStateEvent event = mapper.project(state, 10);
+        OrderBookDepthStateDto event = mapper.project(state, 10);
 
         assertEquals(1, event.metadata().schemaVersion());
-        assertEquals("orderbook_l2_topn_state", event.metadata().eventType());
+        assertEquals("orderbook_l2_depth_state", event.metadata().eventType());
         assertEquals("binance", event.metadata().exchange());
         assertEquals("spot", event.metadata().marketType());
         assertEquals("BTCUSDT", event.metadata().symbol());
         assertEquals("BTCUSDT", event.metadata().instrumentId());
         assertEquals(1000L, event.metadata().exchangeTs());
+        assertEquals(0L, event.metadata().receivedTs());
         assertEquals(2000L, event.metadata().processedTs());
-        assertEquals(42, event.metadata().localUpdateId());
+        assertEquals("42", event.metadata().eventId());
+        assertEquals("mss", event.metadata().sourceStream());
+        assertEquals("BTC", event.metadata().base());
+        assertEquals("USDT", event.metadata().quote());
     }
 
     @Test
-    void trustedFlagIsPreserved() {
+    void syncStatusReflectsTrustedFlag() {
         SymbolState state = liveState();
         state.setTrusted(true);
 
-        OrderBookTopNStateEvent event = mapper.project(state, 5);
+        OrderBookDepthStateDto event = mapper.project(state, 5);
 
-        assertTrue(event.trusted());
+        assertEquals(BookSyncStatus.IN_SYNC, event.syncStatus());
+    }
+
+    @Test
+    void untrustedMapsToOutOfSync() {
+        SymbolState state = liveState();
+        state.setTrusted(false);
+
+        OrderBookDepthStateDto event = mapper.project(state, 5);
+
+        assertEquals(BookSyncStatus.OUT_OF_SYNC, event.syncStatus());
     }
 
     @Test
@@ -142,10 +157,10 @@ class OrderBookTopNStateMapperTest {
         state.getOrderBook().getBids().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.50000000"));
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50001.00"), ScaledDecimal.parse("2.75000000"));
 
-        OrderBookTopNStateEvent event = mapper.project(state, 5);
+        OrderBookDepthStateDto event = mapper.project(state, 5);
 
-        assertEquals("1.50000000", event.bids().get(0).qty());
-        assertEquals("2.75000000", event.asks().get(0).qty());
+        assertEquals("1.50000000", event.bidLevels().get(0).qty());
+        assertEquals("2.75000000", event.askLevels().get(0).qty());
     }
 
     private static SymbolState liveState() {
@@ -153,6 +168,8 @@ class OrderBookTopNStateMapperTest {
         state.setStatus(SymbolStateStatus.LIVE);
         state.setTrusted(true);
         state.setMarketType("spot");
+        state.setBase("BTC");
+        state.setQuote("USDT");
         state.setInstrumentId("BTCUSDT");
         return state;
     }

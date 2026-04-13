@@ -1,4 +1,4 @@
-package com.trading.mss.message.inbound;
+package com.trading.mss.dto;
 
 public record KafkaMessageContext(
         String key,

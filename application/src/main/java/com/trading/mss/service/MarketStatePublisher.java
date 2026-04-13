@@ -3,19 +3,19 @@ package com.trading.mss.service;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.mapper.BboStateMapper;
-import com.trading.mss.mapper.OrderBookTopNStateMapper;
+import com.trading.mss.mapper.OrderBookDepthStateMapper;
 import com.trading.mss.port.output.PublishBboStatePort;
-import com.trading.mss.port.output.PublishOrderBookTopNStatePort;
+import com.trading.mss.port.output.PublishOrderBookDepthStatePort;
 import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
 public class MarketStatePublisher {
 
     private final BboStateMapper bboStateMapper;
-    private final OrderBookTopNStateMapper orderBookTopNStateMapper;
+    private final OrderBookDepthStateMapper orderBookDepthStateMapper;
     private final PublishBboStatePort publishBboStatePort;
-    private final PublishOrderBookTopNStatePort publishOrderBookTopNStatePort;
-    private final int topNDepth;
+    private final PublishOrderBookDepthStatePort publishOrderBookDepthStatePort;
+    private final int publishedLevels;
 
     public void publishProjectedStateIfLive(SymbolState state) {
         if (state.getStatus() != SymbolStateStatus.LIVE || !state.isTrusted()) {
@@ -23,6 +23,6 @@ public class MarketStatePublisher {
         }
 
         bboStateMapper.project(state).ifPresent(publishBboStatePort::publish);
-        publishOrderBookTopNStatePort.publish(orderBookTopNStateMapper.project(state, topNDepth));
+        publishOrderBookDepthStatePort.publish(orderBookDepthStateMapper.project(state, publishedLevels));
     }
 }

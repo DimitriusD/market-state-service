@@ -6,17 +6,24 @@ import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.domain.model.BufferedDepthDiff;
 import com.trading.mss.mapper.BboStateMapper;
-import com.trading.mss.mapper.OrderBookTopNStateMapper;
-import com.trading.mss.message.inbound.DepthDiffEvent;
-import com.trading.mss.message.inbound.KafkaMessageContext;
-import com.trading.mss.message.inbound.Metadata;
-import com.trading.mss.message.inbound.PriceLevel;
-import com.trading.mss.message.outbound.BboStateEvent;
-import com.trading.mss.message.outbound.OrderBookTopNStateEvent;
+import com.trading.mss.mapper.OrderBookDepthStateMapper;
+import com.trading.mss.dto.market.DepthDiffDto;
+import com.trading.mss.dto.KafkaMessageContext;
+import com.trading.mss.dto.common.MetadataDto;
+import com.trading.mss.dto.common.PriceLevelDto;
+import com.trading.mss.dto.orderbook.BboStateDto;
+import com.trading.mss.dto.orderbook.BookSyncStatus;
+import com.trading.mss.dto.orderbook.OrderBookDepthStateDto;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
 import com.trading.mss.port.output.PublishBboStatePort;
-import com.trading.mss.port.output.PublishOrderBookTopNStatePort;
+import com.trading.mss.port.output.PublishOrderBookDepthStatePort;
 import com.trading.mss.port.output.SymbolStateStorePort;
+import com.trading.mss.service.handler.BootstrapPhaseStateHandler;
+import com.trading.mss.service.handler.BufferingDiffsStateHandler;
+import com.trading.mss.service.handler.DepthDiffStateHandlerRegistry;
+import com.trading.mss.service.handler.InitDepthDiffStateHandler;
+import com.trading.mss.service.handler.LiveDepthDiffStateHandler;
+import com.trading.mss.service.handler.ResyncingDepthDiffStateHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -32,7 +39,7 @@ class ProcessDepthDiffServiceTest {
 
     private static final int SNAPSHOT_DEPTH_LIMIT = 1000;
     private static final int MAX_BUFFERED_EVENTS = 10;
-    private static final int TOP_N_DEPTH = 10;
+    private static final int PUBLISHED_LEVELS = 10;
 
     private StubSymbolStateStore stateStore;
     private StubSnapshotPort snapshotPort;
@@ -55,10 +62,10 @@ class ProcessDepthDiffServiceTest {
         SymbolStateLifecycleService lifecycleService = new SymbolStateLifecycleService(stateStore);
         MarketStatePublisher marketStatePublisher = new MarketStatePublisher(
                 new BboStateMapper(),
-                new OrderBookTopNStateMapper(),
+                new OrderBookDepthStateMapper(),
                 bboPublisher,
                 topNPublisher,
-                TOP_N_DEPTH
+                PUBLISHED_LEVELS
         );
         LiveOrderBookUpdateService liveOrderBookUpdateService = new LiveOrderBookUpdateService(
                 orderBookApplier,
@@ -76,13 +83,21 @@ class ProcessDepthDiffServiceTest {
                 marketStatePublisher,
                 SNAPSHOT_DEPTH_LIMIT
         );
-        return new ProcessDepthDiffService(
-                stateStore,
-                depthDiffBootstrapService,
-                liveOrderBookUpdateService,
-                lifecycleService,
-                maxBufferedEvents
-        );
+        DepthDiffBufferService bufferService = new DepthDiffBufferService(lifecycleService, maxBufferedEvents);
+
+        BootstrapPhaseStateHandler bootstrapPhaseHandler =
+                new BootstrapPhaseStateHandler(bufferService, stateStore);
+
+        DepthDiffStateHandlerRegistry registry = new DepthDiffStateHandlerRegistry(List.of(
+                new InitDepthDiffStateHandler(bufferService, depthDiffBootstrapService),
+                new BufferingDiffsStateHandler(bufferService, depthDiffBootstrapService),
+                bootstrapPhaseHandler,
+                new LiveDepthDiffStateHandler(liveOrderBookUpdateService),
+                new ResyncingDepthDiffStateHandler(bufferService, depthDiffBootstrapService, lifecycleService)
+        ));
+        registry.registerAdditionalStatus(SymbolStateStatus.APPLYING_BUFFER, bootstrapPhaseHandler);
+
+        return new ProcessDepthDiffService(stateStore, registry);
     }
 
     @Nested
@@ -91,13 +106,13 @@ class ProcessDepthDiffServiceTest {
         @Test
         void successfulBootstrap_goesLive() {
             snapshotPort.setSnapshot(snapshot(100,
-                    List.of(new PriceLevel("50000.00", "1.0")),
-                    List.of(new PriceLevel("50001.00", "1.0"))));
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
 
             service.process(
                     event(98, 105,
-                            List.of(new PriceLevel("49999.00", "0.5")),
-                            List.of(new PriceLevel("50002.00", "0.5"))),
+                            List.of(new PriceLevelDto("49999.00", "0.5")),
+                            List.of(new PriceLevelDto("50002.00", "0.5"))),
                     ctx(1));
 
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
@@ -246,8 +261,8 @@ class ProcessDepthDiffServiceTest {
         @BeforeEach
         void bootstrapToLive() {
             snapshotPort.setSnapshot(snapshot(100,
-                    List.of(new PriceLevel("50000.00", "1.0")),
-                    List.of(new PriceLevel("50001.00", "1.0"))));
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
         }
 
@@ -255,7 +270,7 @@ class ProcessDepthDiffServiceTest {
         void apply_updatesLocalUpdateIdAndBook() {
             service.process(
                     event(106, 110,
-                            List.of(new PriceLevel("49999.00", "2.0")),
+                            List.of(new PriceLevelDto("49999.00", "2.0")),
                             List.of()),
                     ctx(2));
 
@@ -271,7 +286,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(
                     event(90, 100,
-                            List.of(new PriceLevel("48000.00", "5.0")),
+                            List.of(new PriceLevelDto("48000.00", "5.0")),
                             List.of()),
                     ctx(2));
 
@@ -296,8 +311,8 @@ class ProcessDepthDiffServiceTest {
         @Test
         void resyncing_restartsBootstrapSuccessfully() {
             snapshotPort.setSnapshot(snapshot(100,
-                    List.of(new PriceLevel("50000.00", "1.0")),
-                    List.of(new PriceLevel("50001.00", "1.0"))));
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             service.process(event(200, 210, List.of(), List.of()), ctx(2));
@@ -305,8 +320,8 @@ class ProcessDepthDiffServiceTest {
                     stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
 
             snapshotPort.setSnapshot(snapshot(300,
-                    List.of(new PriceLevel("51000.00", "1.0")),
-                    List.of(new PriceLevel("51001.00", "1.0"))));
+                    List.of(new PriceLevelDto("51000.00", "1.0")),
+                    List.of(new PriceLevelDto("51001.00", "1.0"))));
             service.process(event(298, 310, List.of(), List.of()), ctx(3));
 
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
@@ -323,25 +338,25 @@ class ProcessDepthDiffServiceTest {
         @Test
         void publishesAfterSuccessfulBootstrapToLive() {
             snapshotPort.setSnapshot(snapshot(100,
-                    List.of(new PriceLevel("50000.00", "1.0")),
-                    List.of(new PriceLevel("50001.00", "1.0"))));
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
 
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             assertEquals(1, bboPublisher.published.size());
             assertEquals(1, topNPublisher.published.size());
 
-            BboStateEvent bbo = bboPublisher.published.get(0);
+            BboStateDto bbo = bboPublisher.published.get(0);
             assertEquals("50000.00000000", bbo.bestBid().price());
             assertEquals("50001.00000000", bbo.bestAsk().price());
-            assertTrue(bbo.trusted());
+            assertEquals(BookSyncStatus.IN_SYNC, bbo.syncStatus());
         }
 
         @Test
         void publishesAfterLiveApply() {
             snapshotPort.setSnapshot(snapshot(100,
-                    List.of(new PriceLevel("50000.00", "1.0")),
-                    List.of(new PriceLevel("50001.00", "1.0"))));
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             bboPublisher.published.clear();
@@ -349,7 +364,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(
                     event(106, 110,
-                            List.of(new PriceLevel("49999.00", "2.0")),
+                            List.of(new PriceLevelDto("49999.00", "2.0")),
                             List.of()),
                     ctx(2));
 
@@ -400,8 +415,8 @@ class ProcessDepthDiffServiceTest {
         @Test
         void doesNotPublishDuringResyncing() {
             snapshotPort.setSnapshot(snapshot(100,
-                    List.of(new PriceLevel("50000.00", "1.0")),
-                    List.of(new PriceLevel("50001.00", "1.0"))));
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             bboPublisher.published.clear();
@@ -432,28 +447,28 @@ class ProcessDepthDiffServiceTest {
         @Test
         void topNEventContainsCorrectDepthAndLevels() {
             snapshotPort.setSnapshot(snapshot(100,
-                    List.of(new PriceLevel("50000.00", "1.0"), new PriceLevel("49999.00", "2.0")),
-                    List.of(new PriceLevel("50001.00", "1.0"), new PriceLevel("50002.00", "3.0"))));
+                    List.of(new PriceLevelDto("50000.00", "1.0"), new PriceLevelDto("49999.00", "2.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"), new PriceLevelDto("50002.00", "3.0"))));
 
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             assertEquals(1, topNPublisher.published.size());
-            OrderBookTopNStateEvent topN = topNPublisher.published.get(0);
-            assertEquals(TOP_N_DEPTH, topN.depth());
-            assertEquals(2, topN.bids().size());
-            assertEquals(2, topN.asks().size());
-            assertEquals("50000.00000000", topN.bids().get(0).price());
-            assertEquals("49999.00000000", topN.bids().get(1).price());
-            assertEquals("50001.00000000", topN.asks().get(0).price());
-            assertEquals("50002.00000000", topN.asks().get(1).price());
-            assertTrue(topN.trusted());
+            OrderBookDepthStateDto depthState = topNPublisher.published.get(0);
+            assertEquals(PUBLISHED_LEVELS, depthState.publishedLevels());
+            assertEquals(2, depthState.bidLevels().size());
+            assertEquals(2, depthState.askLevels().size());
+            assertEquals("50000.00000000", depthState.bidLevels().get(0).price());
+            assertEquals("49999.00000000", depthState.bidLevels().get(1).price());
+            assertEquals("50001.00000000", depthState.askLevels().get(0).price());
+            assertEquals("50002.00000000", depthState.askLevels().get(1).price());
+            assertEquals(BookSyncStatus.IN_SYNC, depthState.syncStatus());
         }
 
         @Test
         void publishesAfterResyncRecovery() {
             snapshotPort.setSnapshot(snapshot(100,
-                    List.of(new PriceLevel("50000.00", "1.0")),
-                    List.of(new PriceLevel("50001.00", "1.0"))));
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             service.process(event(200, 210, List.of(), List.of()), ctx(2));
@@ -462,8 +477,8 @@ class ProcessDepthDiffServiceTest {
             topNPublisher.published.clear();
 
             snapshotPort.setSnapshot(snapshot(300,
-                    List.of(new PriceLevel("51000.00", "1.0")),
-                    List.of(new PriceLevel("51001.00", "1.0"))));
+                    List.of(new PriceLevelDto("51000.00", "1.0")),
+                    List.of(new PriceLevelDto("51001.00", "1.0"))));
             service.process(event(298, 310, List.of(), List.of()), ctx(3));
 
             assertFalse(bboPublisher.published.isEmpty());
@@ -474,30 +489,32 @@ class ProcessDepthDiffServiceTest {
         @Test
         void bboMetadataContainsSymbolAndVenue() {
             snapshotPort.setSnapshot(snapshot(100,
-                    List.of(new PriceLevel("50000.00", "1.0")),
-                    List.of(new PriceLevel("50001.00", "1.0"))));
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
-            BboStateEvent bbo = bboPublisher.published.get(0);
+            BboStateDto bbo = bboPublisher.published.get(0);
             assertEquals("BTCUSDT", bbo.metadata().symbol());
             assertEquals("binance", bbo.metadata().exchange());
             assertEquals("spot", bbo.metadata().marketType());
             assertEquals("BTCUSDT", bbo.metadata().instrumentId());
+            assertEquals("BTC", bbo.metadata().base());
+            assertEquals("USDT", bbo.metadata().quote());
         }
     }
 
-    private static DepthDiffEvent event(long firstUpdateId, long finalUpdateId,
-                                        List<PriceLevel> bids, List<PriceLevel> asks) {
+    private static DepthDiffDto event(long firstUpdateId, long finalUpdateId,
+                                      List<PriceLevelDto> bids, List<PriceLevelDto> asks) {
         long now = System.currentTimeMillis();
-        var metadata = new Metadata(1, "depthDiff", "binance", "spot",
+        var metadata = new MetadataDto(1, "depthDiff", "binance", "spot",
                 "BTC", "USDT", "BTCUSDT", "BTCUSDT", "evt-1", "stream-1",
                 now, now, now);
-        return new DepthDiffEvent(metadata, now, firstUpdateId, finalUpdateId, null, bids, asks);
+        return new DepthDiffDto(metadata, now, firstUpdateId, finalUpdateId, null, bids, asks);
     }
 
     private static OrderBookSnapshot snapshot(long lastUpdateId,
-                                              List<PriceLevel> bids,
-                                              List<PriceLevel> asks) {
+                                              List<PriceLevelDto> bids,
+                                              List<PriceLevelDto> asks) {
         return new OrderBookSnapshot("BTCUSDT", "binance", lastUpdateId,
                 bids, asks, 1000, System.currentTimeMillis());
     }
@@ -548,19 +565,19 @@ class ProcessDepthDiffServiceTest {
     }
 
     static class RecordingBboPublisher implements PublishBboStatePort {
-        final List<BboStateEvent> published = new ArrayList<>();
+        final List<BboStateDto> published = new ArrayList<>();
 
         @Override
-        public void publish(BboStateEvent event) {
+        public void publish(BboStateDto event) {
             published.add(event);
         }
     }
 
-    static class RecordingTopNPublisher implements PublishOrderBookTopNStatePort {
-        final List<OrderBookTopNStateEvent> published = new ArrayList<>();
+    static class RecordingTopNPublisher implements PublishOrderBookDepthStatePort {
+        final List<OrderBookDepthStateDto> published = new ArrayList<>();
 
         @Override
-        public void publish(OrderBookTopNStateEvent event) {
+        public void publish(OrderBookDepthStateDto event) {
             published.add(event);
         }
     }

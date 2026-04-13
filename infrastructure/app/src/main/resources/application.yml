@@ -12,6 +12,9 @@ spring:
 
 app:
   kafka:
+    schema-registry:
+      url: ${APP_SCHEMA_REGISTRY_URL:http://localhost:8081}
+      auto-register-schemas: ${APP_SCHEMA_REGISTRY_AUTO_REGISTER:true}
     topic:
       depth-diff: ${APP_KAFKA_TOPIC_DEPTH_DIFF:canonical.market.depthdiff.v1}
     topics:

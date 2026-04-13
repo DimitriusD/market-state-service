@@ -3,9 +3,9 @@ package com.trading.mss.service;
 import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.ScaledDecimal;
-import com.trading.mss.message.inbound.DepthDiffEvent;
-import com.trading.mss.message.inbound.Metadata;
-import com.trading.mss.message.inbound.PriceLevel;
+import com.trading.mss.dto.market.DepthDiffDto;
+import com.trading.mss.dto.common.MetadataDto;
+import com.trading.mss.dto.common.PriceLevelDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -28,7 +28,7 @@ class OrderBookApplierTest {
     @Test
     void addsNewBidLevel() {
         applier.applyDiff(book, diff(
-                List.of(new PriceLevel("100.00", "1.5")),
+                List.of(new PriceLevelDto("100.00", "1.5")),
                 List.of()
         ));
 
@@ -39,11 +39,11 @@ class OrderBookApplierTest {
     @Test
     void updatesExistingBidLevel() {
         applier.applyDiff(book, diff(
-                List.of(new PriceLevel("100.00", "1.0")),
+                List.of(new PriceLevelDto("100.00", "1.0")),
                 List.of()
         ));
         applier.applyDiff(book, diff(
-                List.of(new PriceLevel("100.00", "2.5")),
+                List.of(new PriceLevelDto("100.00", "2.5")),
                 List.of()
         ));
 
@@ -54,11 +54,11 @@ class OrderBookApplierTest {
     @Test
     void removesLevelWhenQtyIsZero() {
         applier.applyDiff(book, diff(
-                List.of(new PriceLevel("100.00", "1.0")),
+                List.of(new PriceLevelDto("100.00", "1.0")),
                 List.of()
         ));
         applier.applyDiff(book, diff(
-                List.of(new PriceLevel("100.00", "0")),
+                List.of(new PriceLevelDto("100.00", "0")),
                 List.of()
         ));
 
@@ -69,7 +69,7 @@ class OrderBookApplierTest {
     void addsNewAskLevel() {
         applier.applyDiff(book, diff(
                 List.of(),
-                List.of(new PriceLevel("200.00", "3.0"))
+                List.of(new PriceLevelDto("200.00", "3.0"))
         ));
 
         assertEquals(1, book.getAsks().size());
@@ -80,9 +80,9 @@ class OrderBookApplierTest {
     void bestBidReturnsHighestPrice() {
         applier.applyDiff(book, diff(
                 List.of(
-                        new PriceLevel("100.00", "1.0"),
-                        new PriceLevel("105.00", "2.0"),
-                        new PriceLevel("99.00", "3.0")
+                        new PriceLevelDto("100.00", "1.0"),
+                        new PriceLevelDto("105.00", "2.0"),
+                        new PriceLevelDto("99.00", "3.0")
                 ),
                 List.of()
         ));
@@ -95,9 +95,9 @@ class OrderBookApplierTest {
         applier.applyDiff(book, diff(
                 List.of(),
                 List.of(
-                        new PriceLevel("200.00", "1.0"),
-                        new PriceLevel("195.00", "2.0"),
-                        new PriceLevel("210.00", "3.0")
+                        new PriceLevelDto("200.00", "1.0"),
+                        new PriceLevelDto("195.00", "2.0"),
+                        new PriceLevelDto("210.00", "3.0")
                 )
         ));
 
@@ -108,9 +108,9 @@ class OrderBookApplierTest {
     void bidsAreInDescendingOrder() {
         applier.applyDiff(book, diff(
                 List.of(
-                        new PriceLevel("100.00", "1.0"),
-                        new PriceLevel("102.00", "1.0"),
-                        new PriceLevel("101.00", "1.0")
+                        new PriceLevelDto("100.00", "1.0"),
+                        new PriceLevelDto("102.00", "1.0"),
+                        new PriceLevelDto("101.00", "1.0")
                 ),
                 List.of()
         ));
@@ -126,9 +126,9 @@ class OrderBookApplierTest {
         applier.applyDiff(book, diff(
                 List.of(),
                 List.of(
-                        new PriceLevel("203.00", "1.0"),
-                        new PriceLevel("201.00", "1.0"),
-                        new PriceLevel("202.00", "1.0")
+                        new PriceLevelDto("203.00", "1.0"),
+                        new PriceLevelDto("201.00", "1.0"),
+                        new PriceLevelDto("202.00", "1.0")
                 )
         ));
 
@@ -150,7 +150,7 @@ class OrderBookApplierTest {
 
     @Test
     void handlesNullBidsAndAsks() {
-        var event = new DepthDiffEvent(dummyMetadata(), null, 1, 2, null, null, null);
+        var event = new DepthDiffDto(dummyMetadata(), null, 1, 2, null, null, null);
         applier.applyDiff(book, event);
 
         assertTrue(book.getBids().isEmpty());
@@ -160,8 +160,8 @@ class OrderBookApplierTest {
     @Test
     void clearRemovesAllLevels() {
         applier.applyDiff(book, diff(
-                List.of(new PriceLevel("100.00", "1.0")),
-                List.of(new PriceLevel("200.00", "2.0"))
+                List.of(new PriceLevelDto("100.00", "1.0")),
+                List.of(new PriceLevelDto("200.00", "2.0"))
         ));
 
         book.clear();
@@ -173,14 +173,14 @@ class OrderBookApplierTest {
     @Test
     void applySnapshot_clearsBookAndAppliesLevels() {
         applier.applyDiff(book, diff(
-                List.of(new PriceLevel("100.00", "1.0")),
-                List.of(new PriceLevel("200.00", "2.0"))
+                List.of(new PriceLevelDto("100.00", "1.0")),
+                List.of(new PriceLevelDto("200.00", "2.0"))
         ));
 
         var snapshot = new OrderBookSnapshot(
                 "BTCUSDT", "binance", 500,
-                List.of(new PriceLevel("50000.00", "1.5"), new PriceLevel("49999.00", "2.0")),
-                List.of(new PriceLevel("50001.00", "1.0"), new PriceLevel("50002.00", "3.0")),
+                List.of(new PriceLevelDto("50000.00", "1.5"), new PriceLevelDto("49999.00", "2.0")),
+                List.of(new PriceLevelDto("50001.00", "1.0"), new PriceLevelDto("50002.00", "3.0")),
                 1000, System.currentTimeMillis()
         );
 
@@ -206,14 +206,14 @@ class OrderBookApplierTest {
     @Test
     void applySnapshot_replacesExistingBook() {
         applier.applyDiff(book, diff(
-                List.of(new PriceLevel("100.00", "1.0"), new PriceLevel("101.00", "2.0")),
-                List.of(new PriceLevel("200.00", "3.0"))
+                List.of(new PriceLevelDto("100.00", "1.0"), new PriceLevelDto("101.00", "2.0")),
+                List.of(new PriceLevelDto("200.00", "3.0"))
         ));
         assertEquals(2, book.getBids().size());
 
         var snapshot = new OrderBookSnapshot("BTCUSDT", "binance", 500,
-                List.of(new PriceLevel("50000.00", "1.0")),
-                List.of(new PriceLevel("50001.00", "1.0")),
+                List.of(new PriceLevelDto("50000.00", "1.0")),
+                List.of(new PriceLevelDto("50001.00", "1.0")),
                 1000, System.currentTimeMillis());
 
         applier.applySnapshot(book, snapshot);
@@ -223,12 +223,12 @@ class OrderBookApplierTest {
         assertNull(book.getBids().get(ScaledDecimal.parse("100.00")));
     }
 
-    private static DepthDiffEvent diff(List<PriceLevel> bids, List<PriceLevel> asks) {
-        return new DepthDiffEvent(dummyMetadata(), null, 1, 2, null, bids, asks);
+    private static DepthDiffDto diff(List<PriceLevelDto> bids, List<PriceLevelDto> asks) {
+        return new DepthDiffDto(dummyMetadata(), null, 1, 2, null, bids, asks);
     }
 
-    private static Metadata dummyMetadata() {
-        return new Metadata(1, "depth_diff", "binance", "spot",
+    private static MetadataDto dummyMetadata() {
+        return new MetadataDto(1, "depth_diff", "binance", "spot",
                 "BTC", "USDT", "BTCUSDT", "BINANCE|SPOT|BTC|USDT",
                 "test-event-id", "btcusdt@depth@100ms", 0, 0, 0);
     }

@@ -19,6 +19,8 @@ public class SymbolState {
     private SymbolStateStatus status = SymbolStateStatus.INIT;
     private boolean trusted = false;
     private String marketType;
+    private String base;
+    private String quote;
     private String instrumentId;
     private long localUpdateId = -1;
     private long lastProcessedOffset = -1;

@@ -1,6 +1,6 @@
 package com.trading.mss.domain.model;
 
-import com.trading.mss.message.inbound.PriceLevel;
+import com.trading.mss.dto.common.PriceLevelDto;
 
 import java.util.List;
 
@@ -8,8 +8,8 @@ public record OrderBookSnapshot(
         String symbol,
         String venue,
         long lastUpdateId,
-        List<PriceLevel> bids,
-        List<PriceLevel> asks,
+        List<PriceLevelDto> bids,
+        List<PriceLevelDto> asks,
         int depthLimit,
         long loadedAt
 ) {}

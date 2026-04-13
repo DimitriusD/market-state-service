@@ -5,8 +5,8 @@ import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.SyncDecision;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
-import com.trading.mss.message.inbound.DepthDiffEvent;
-import com.trading.mss.message.inbound.KafkaMessageContext;
+import com.trading.mss.dto.market.DepthDiffDto;
+import com.trading.mss.dto.KafkaMessageContext;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import lombok.RequiredArgsConstructor;
@@ -66,7 +66,7 @@ public class DepthDiffBootstrapService {
             return;
         }
 
-        DepthDiffEvent firstRemainingEvent = state.getBufferedEvents().peekFirst().event();
+        DepthDiffDto firstRemainingEvent = state.getBufferedEvents().peekFirst().event();
         if (!syncPolicy.isBridgingEvent(firstRemainingEvent, snapshot.lastUpdateId())) {
             log.warn("No bridging event: symbol={} firstU={} u={} snapshotLastUpdateId={}",
                     state.getSymbol(), firstRemainingEvent.firstUpdateId(), firstRemainingEvent.finalUpdateId(), snapshot.lastUpdateId());
@@ -132,7 +132,7 @@ public class DepthDiffBootstrapService {
     public boolean replayBufferedEvents(SymbolState state) {
         while (!state.getBufferedEvents().isEmpty()) {
             BufferedDepthDiff buffered = state.getBufferedEvents().pollFirst();
-            DepthDiffEvent bufferedEvent = buffered.event();
+            DepthDiffDto bufferedEvent = buffered.event();
             KafkaMessageContext bufferedCtx = buffered.context();
             SyncDecision decision = syncPolicy.evaluate(bufferedEvent, state);
 
@@ -153,8 +153,8 @@ public class DepthDiffBootstrapService {
         return true;
     }
 
-    private void applyDepthDiffToState(SymbolState state, DepthDiffEvent event, KafkaMessageContext ctx) {
-        var metadata = event.metadata();
+    private void applyDepthDiffToState(SymbolState state, DepthDiffDto event, KafkaMessageContext ctx) {
+        var metadata = event.metadataDto();
         orderBookApplier.applyDiff(state.getOrderBook(), event);
         state.setLocalUpdateId(event.finalUpdateId());
         state.setLastProcessedOffset(ctx.offset());

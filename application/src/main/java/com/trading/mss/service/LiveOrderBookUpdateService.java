@@ -3,8 +3,8 @@ package com.trading.mss.service;
 import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.SyncDecision;
 import com.trading.mss.domain.model.SymbolState;
-import com.trading.mss.message.inbound.DepthDiffEvent;
-import com.trading.mss.message.inbound.KafkaMessageContext;
+import com.trading.mss.dto.market.DepthDiffDto;
+import com.trading.mss.dto.KafkaMessageContext;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +19,7 @@ public class LiveOrderBookUpdateService {
     private final SymbolStateLifecycleService lifecycleService;
     private final MarketStatePublisher marketStatePublisher;
 
-    public void handleLive(DepthDiffEvent event, SymbolState state, KafkaMessageContext ctx) {
+    public void handleLive(DepthDiffDto event, SymbolState state, KafkaMessageContext ctx) {
         SyncDecision decision = syncPolicy.evaluate(event, state);
         switch (decision) {
             case IGNORE -> logIgnore(event, state, ctx);
@@ -28,14 +28,14 @@ public class LiveOrderBookUpdateService {
         }
     }
 
-    private void logIgnore(DepthDiffEvent event, SymbolState state, KafkaMessageContext ctx) {
+    private void logIgnore(DepthDiffDto event, SymbolState state, KafkaMessageContext ctx) {
         log.info("IGNORE: symbol={} localUpdateId={} U={} u={} partition={} offset={} key={}",
                 state.getSymbol(), state.getLocalUpdateId(),
                 event.firstUpdateId(), event.finalUpdateId(),
                 ctx.partition(), ctx.offset(), ctx.key());
     }
 
-    private void applyLiveEvent(DepthDiffEvent event, SymbolState state, KafkaMessageContext ctx) {
+    private void applyLiveEvent(DepthDiffDto event, SymbolState state, KafkaMessageContext ctx) {
         long prevLocalUpdateId = state.getLocalUpdateId();
         applyDepthDiffToState(state, event, ctx, true);
 
@@ -53,8 +53,8 @@ public class LiveOrderBookUpdateService {
         marketStatePublisher.publishProjectedStateIfLive(state);
     }
 
-    void applyDepthDiffToState(SymbolState state, DepthDiffEvent event, KafkaMessageContext ctx, boolean save) {
-        var metadata = event.metadata();
+    void applyDepthDiffToState(SymbolState state, DepthDiffDto event, KafkaMessageContext ctx, boolean save) {
+        var metadata = event.metadataDto();
         orderBookApplier.applyDiff(state.getOrderBook(), event);
         state.setLocalUpdateId(event.finalUpdateId());
         state.setLastProcessedOffset(ctx.offset());

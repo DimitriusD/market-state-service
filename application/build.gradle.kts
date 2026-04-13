@@ -4,6 +4,7 @@ plugins {
 
 dependencies {
     api(libs.slf4jApi)
+    api(libs.schemas)
 
     compileOnly(libs.jakartaValidationApi)
     compileOnly(libs.lombok)

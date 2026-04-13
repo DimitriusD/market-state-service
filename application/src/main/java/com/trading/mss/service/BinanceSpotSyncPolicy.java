@@ -2,10 +2,10 @@ package com.trading.mss.service;
 
 import com.trading.mss.domain.model.SyncDecision;
 import com.trading.mss.domain.model.SymbolState;
-import com.trading.mss.message.inbound.DepthDiffEvent;
+import com.trading.mss.dto.market.DepthDiffDto;
 
 public class BinanceSpotSyncPolicy {
-    public SyncDecision evaluate(DepthDiffEvent event, SymbolState state) {
+    public SyncDecision evaluate(DepthDiffDto event, SymbolState state) {
         long localUid = state.getLocalUpdateId();
 
         if (localUid < 0) {
@@ -27,11 +27,11 @@ public class BinanceSpotSyncPolicy {
         return snapshotLastUpdateId < firstBufferedUpdateId - 1;
     }
 
-    public boolean shouldDiscardBufferedEvent(DepthDiffEvent event, long snapshotLastUpdateId) {
+    public boolean shouldDiscardBufferedEvent(DepthDiffDto event, long snapshotLastUpdateId) {
         return event.finalUpdateId() <= snapshotLastUpdateId;
     }
 
-    public boolean isBridgingEvent(DepthDiffEvent event, long snapshotLastUpdateId) {
+    public boolean isBridgingEvent(DepthDiffDto event, long snapshotLastUpdateId) {
         long requiredNextUpdateId = snapshotLastUpdateId + 1;
         return event.firstUpdateId() <= requiredNextUpdateId
                 && requiredNextUpdateId <= event.finalUpdateId();

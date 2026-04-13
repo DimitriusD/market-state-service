@@ -1,7 +1,7 @@
 package com.trading.mss.port.output;
 
-import com.trading.mss.message.outbound.BboStateEvent;
+import com.trading.mss.dto.orderbook.BboStateDto;
 
 public interface PublishBboStatePort {
-    void publish(BboStateEvent event);
+    void publish(BboStateDto event);
 }

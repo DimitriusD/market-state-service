@@ -1,9 +1,9 @@
 package com.trading.mss.domain.model;
 
-import com.trading.mss.message.inbound.DepthDiffEvent;
-import com.trading.mss.message.inbound.KafkaMessageContext;
+import com.trading.mss.dto.market.DepthDiffDto;
+import com.trading.mss.dto.KafkaMessageContext;
 
 public record BufferedDepthDiff(
-        DepthDiffEvent event,
+        DepthDiffDto event,
         KafkaMessageContext context
 ) {}

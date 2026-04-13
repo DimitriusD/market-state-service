@@ -1,9 +1,11 @@
 package com.trading.mss.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trading.contracts.market.DepthDiffEvent;
 import com.trading.mss.consumer.DepthDiffConsumer;
-import com.trading.mss.message.inbound.DepthDiffEvent;
 import com.trading.mss.port.input.ProcessDepthDiffUseCase;
+import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
+import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,8 +14,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
-import org.springframework.kafka.support.serializer.JsonDeserializer;
 
+import java.util.HashMap;
 import java.util.Map;
 
 @Configuration
@@ -21,20 +23,20 @@ public class KafkaConsumerConfig {
 
     @Bean
     public ConsumerFactory<String, DepthDiffEvent> depthDiffConsumerFactory(
-            ObjectMapper objectMapper,
             @Value("${spring.kafka.bootstrap-servers}") String bootstrapServers,
-            @Value("${spring.kafka.consumer.group-id}") String groupId) {
+            @Value("${spring.kafka.consumer.group-id}") String groupId,
+            @Value("${app.kafka.schema-registry.url:http://localhost:8081}") String schemaRegistryUrl) {
 
-        JsonDeserializer<DepthDiffEvent> deserializer = new JsonDeserializer<>(DepthDiffEvent.class, objectMapper);
-        deserializer.setUseTypeHeaders(false);
+        Map<String, Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class);
+        props.put(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
+        props.put(KafkaAvroDeserializerConfig.SPECIFIC_AVRO_READER_CONFIG, true);
 
-        Map<String, Object> props = Map.of(
-                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
-                ConsumerConfig.GROUP_ID_CONFIG, groupId,
-                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest"
-        );
-
-        return new DefaultKafkaConsumerFactory<>(props, new StringDeserializer(), deserializer);
+        return new DefaultKafkaConsumerFactory<>(props);
     }
 
     @Bean

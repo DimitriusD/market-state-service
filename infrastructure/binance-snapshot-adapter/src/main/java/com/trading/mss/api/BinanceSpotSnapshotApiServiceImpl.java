@@ -3,7 +3,7 @@ package com.trading.mss.api;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.dto.BinanceDepthLevel;
 import com.trading.mss.dto.BinanceDepthResponse;
-import com.trading.mss.message.inbound.PriceLevel;
+import com.trading.mss.dto.common.PriceLevelDto;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,12 +48,12 @@ public class BinanceSpotSnapshotApiServiceImpl implements BinanceSpotSnapshotApi
 
     }
 
-    private List<PriceLevel> toPriceLevels(List<BinanceDepthLevel> raw) {
+    private List<PriceLevelDto> toPriceLevels(List<BinanceDepthLevel> raw) {
         if (raw == null) {
             return List.of();
         }
         return raw.stream()
-                .map(level -> new PriceLevel(level.price(), level.qty()))
+                .map(level -> new PriceLevelDto(level.price(), level.qty()))
                 .toList();
     }
 }

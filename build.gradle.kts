@@ -6,7 +6,11 @@ version = "0.1.0-SNAPSHOT"
 
 allprojects {
     repositories {
+        mavenLocal()
         mavenCentral()
+        maven {
+            url = uri("https://packages.confluent.io/maven/")
+        }
     }
 }
 

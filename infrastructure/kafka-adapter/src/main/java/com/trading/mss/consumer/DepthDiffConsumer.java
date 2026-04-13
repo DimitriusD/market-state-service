@@ -1,7 +1,8 @@
 package com.trading.mss.consumer;
 
-import com.trading.mss.message.inbound.DepthDiffEvent;
-import com.trading.mss.message.inbound.KafkaMessageContext;
+import com.trading.contracts.market.DepthDiffEvent;
+import com.trading.mss.mapper.DepthDiffAvroMapper;
+import com.trading.mss.dto.KafkaMessageContext;
 import com.trading.mss.port.input.ProcessDepthDiffUseCase;
 import lombok.RequiredArgsConstructor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -18,6 +19,7 @@ public class DepthDiffConsumer {
     )
     public void consume(ConsumerRecord<String, DepthDiffEvent> depthDiffEvent) {
         var context = new KafkaMessageContext(depthDiffEvent.key(), depthDiffEvent.partition(), depthDiffEvent.offset());
-        processDepthDiff.process(depthDiffEvent.value(), context);
+        var dto = DepthDiffAvroMapper.toDto(depthDiffEvent.value());
+        processDepthDiff.process(dto, context);
     }
 }

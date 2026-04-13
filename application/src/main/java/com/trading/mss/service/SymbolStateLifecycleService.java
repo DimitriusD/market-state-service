@@ -3,8 +3,8 @@ package com.trading.mss.service;
 import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
-import com.trading.mss.message.inbound.DepthDiffEvent;
-import com.trading.mss.message.inbound.KafkaMessageContext;
+import com.trading.mss.dto.market.DepthDiffDto;
+import com.trading.mss.dto.KafkaMessageContext;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,7 +32,7 @@ public class SymbolStateLifecycleService {
                 book.bestBid(), book.bestAsk(), book.getBids().size(), book.getAsks().size());
     }
 
-    public void enterResyncFromLive(DepthDiffEvent event, SymbolState state, KafkaMessageContext ctx) {
+    public void enterResyncFromLive(DepthDiffDto event, SymbolState state, KafkaMessageContext ctx) {
         SymbolStateStatus prevStatus = state.getStatus();
         state.setStatus(SymbolStateStatus.RESYNCING);
         state.setTrusted(false);

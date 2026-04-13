@@ -3,9 +3,10 @@ package com.trading.mss.mapper;
 import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.ScaledDecimal;
 import com.trading.mss.domain.model.SymbolState;
-import com.trading.mss.message.outbound.BboMetadata;
-import com.trading.mss.message.outbound.BboStateEvent;
-import com.trading.mss.message.outbound.ProjectedPriceLevel;
+import com.trading.mss.dto.common.MetadataDto;
+import com.trading.mss.dto.common.PriceLevelDto;
+import com.trading.mss.dto.orderbook.BboStateDto;
+import com.trading.mss.dto.orderbook.BookSyncStatus;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -16,7 +17,7 @@ public class BboStateMapper {
     private static final int SCHEMA_VERSION = 1;
     private static final String EVENT_TYPE = "bbo_state";
 
-    public Optional<BboStateEvent> project(SymbolState state) {
+    public Optional<BboStateDto> project(SymbolState state) {
         OrderBook book = state.getOrderBook();
 
         if (!book.hasBids() || !book.hasAsks()) {
@@ -34,11 +35,11 @@ public class BboStateMapper {
                             state.getSymbol()));
         }
 
-        ProjectedPriceLevel bestBid = new ProjectedPriceLevel(
+        PriceLevelDto bestBid = new PriceLevelDto(
                 ScaledDecimal.format(bestBidPrice),
                 ScaledDecimal.format(book.getBids().get(bestBidPrice)));
 
-        ProjectedPriceLevel bestAsk = new ProjectedPriceLevel(
+        PriceLevelDto bestAsk = new PriceLevelDto(
                 ScaledDecimal.format(bestAskPrice),
                 ScaledDecimal.format(book.getAsks().get(bestAskPrice)));
 
@@ -49,17 +50,10 @@ public class BboStateMapper {
                 .divide(BigDecimal.valueOf(2), ScaledDecimal.SCALE_DIGITS, RoundingMode.HALF_UP)
                 .toPlainString();
 
-        BboMetadata metadata = new BboMetadata(
-                SCHEMA_VERSION,
-                EVENT_TYPE,
-                state.getVenue(),
-                state.getMarketType(),
-                state.getSymbol(),
-                state.getInstrumentId(),
-                state.getLastEventExchangeTs(),
-                state.getLastEventProcessedTs(),
-                state.getLocalUpdateId());
+        MetadataDto metadata = StateEventMetadataFactory.from(state, SCHEMA_VERSION, EVENT_TYPE);
 
-        return Optional.of(new BboStateEvent(metadata, bestBid, bestAsk, spread, mid, state.isTrusted()));
+        BookSyncStatus syncStatus =
+                state.isTrusted() ? BookSyncStatus.IN_SYNC : BookSyncStatus.OUT_OF_SYNC;
+        return Optional.of(new BboStateDto(metadata, bestBid, bestAsk, spread, mid, syncStatus));
     }
 }

@@ -1,6 +1,6 @@
-package com.trading.mss.message.inbound;
+package com.trading.mss.dto.common;
 
-public record Metadata(
+public record MetadataDto(
         int schemaVersion,
         String eventType,
         String exchange,
