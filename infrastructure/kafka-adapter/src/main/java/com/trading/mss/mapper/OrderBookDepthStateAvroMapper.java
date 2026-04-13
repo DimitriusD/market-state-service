@@ -1,10 +1,10 @@
 package com.trading.mss.mapper;
 
 import com.trading.contracts.common.EventMetadata;
-import com.trading.contracts.market.PriceLevel;
+import com.trading.contracts.common.PriceLevel;
+import com.trading.contracts.orderbook.OrderBookDepthStateEvent;
 import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.orderbook.OrderBookDepthStateDto;
-import com.trading.mss.message.outbound.OrderBookDepthStateEvent;
 
 import java.util.List;
 
@@ -35,6 +35,10 @@ public final class OrderBookDepthStateAvroMapper {
                 dto.askLevels().stream().map(pl -> new PriceLevel(pl.price(), pl.qty())).toList();
 
         return new OrderBookDepthStateEvent(
-                metadata, dto.publishedLevels(), bidLevels, askLevels, dto.syncStatus());
+                metadata,
+                dto.publishedLevels(),
+                bidLevels,
+                askLevels,
+                BookSyncStatusAvroMapper.toWire(dto.syncStatus()));
     }
 }

@@ -1,8 +1,8 @@
 package com.trading.mss.mapper;
 
 import com.trading.contracts.common.EventMetadata;
+import com.trading.contracts.common.PriceLevel;
 import com.trading.contracts.market.DepthDiffEvent;
-import com.trading.contracts.market.PriceLevel;
 import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.common.PriceLevelDto;

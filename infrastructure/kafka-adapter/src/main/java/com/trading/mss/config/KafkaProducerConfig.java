@@ -1,7 +1,7 @@
 package com.trading.mss.config;
 
 import com.trading.contracts.orderbook.BboStateEvent;
-import com.trading.mss.message.outbound.OrderBookDepthStateEvent;
+import com.trading.contracts.orderbook.OrderBookDepthStateEvent;
 import com.trading.mss.port.output.PublishBboStatePort;
 import com.trading.mss.port.output.PublishOrderBookDepthStatePort;
 import com.trading.mss.publisher.KafkaBboStatePublisher;

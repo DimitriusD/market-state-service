@@ -2,7 +2,7 @@ package com.trading.mss.publisher;
 
 import com.trading.mss.dto.orderbook.OrderBookDepthStateDto;
 import com.trading.mss.mapper.OrderBookDepthStateAvroMapper;
-import com.trading.mss.message.outbound.OrderBookDepthStateEvent;
+import com.trading.contracts.orderbook.OrderBookDepthStateEvent;
 import com.trading.mss.port.output.PublishOrderBookDepthStatePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

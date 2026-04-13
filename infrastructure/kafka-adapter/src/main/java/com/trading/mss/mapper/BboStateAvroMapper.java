@@ -1,7 +1,7 @@
 package com.trading.mss.mapper;
 
 import com.trading.contracts.common.EventMetadata;
-import com.trading.contracts.market.PriceLevel;
+import com.trading.contracts.common.PriceLevel;
 import com.trading.contracts.orderbook.BboStateEvent;
 import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.orderbook.BboStateDto;
@@ -36,6 +36,6 @@ public final class BboStateAvroMapper {
                 bestAsk,
                 dto.spread(),
                 dto.mid(),
-                dto.syncStatus());
+                BookSyncStatusAvroMapper.toWire(dto.syncStatus()));
     }
 }
