@@ -1,7 +1,7 @@
 package com.trading.mss.mapper;
 
-import com.trading.contracts.common.EventMetadata;
-import com.trading.contracts.common.PriceLevel;
+import com.trading.contracts.common.MetadataEvent;
+import com.trading.contracts.common.PriceLevelEvent;
 import com.trading.contracts.orderbook.OrderBookDepthStateEvent;
 import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.orderbook.OrderBookDepthStateDto;
@@ -14,7 +14,7 @@ public final class OrderBookDepthStateAvroMapper {
 
     public static OrderBookDepthStateEvent toAvro(OrderBookDepthStateDto dto) {
         MetadataDto m = dto.metadata();
-        EventMetadata metadata = new EventMetadata(
+        MetadataEvent metadata = new MetadataEvent(
                 m.schemaVersion(),
                 m.eventType(),
                 m.exchange(),
@@ -29,10 +29,10 @@ public final class OrderBookDepthStateAvroMapper {
                 m.receivedTs(),
                 m.processedTs());
 
-        List<PriceLevel> bidLevels =
-                dto.bidLevels().stream().map(pl -> new PriceLevel(pl.price(), pl.qty())).toList();
-        List<PriceLevel> askLevels =
-                dto.askLevels().stream().map(pl -> new PriceLevel(pl.price(), pl.qty())).toList();
+        List<PriceLevelEvent> bidLevels =
+                dto.bidLevels().stream().map(pl -> new PriceLevelEvent(pl.price(), pl.qty())).toList();
+        List<PriceLevelEvent> askLevels =
+                dto.askLevels().stream().map(pl -> new PriceLevelEvent(pl.price(), pl.qty())).toList();
 
         return new OrderBookDepthStateEvent(
                 metadata,

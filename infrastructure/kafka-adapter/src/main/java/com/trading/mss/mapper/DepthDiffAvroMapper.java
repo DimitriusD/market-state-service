@@ -1,11 +1,11 @@
 package com.trading.mss.mapper;
 
-import com.trading.contracts.common.EventMetadata;
-import com.trading.contracts.common.PriceLevel;
+import com.trading.contracts.common.MetadataEvent;
+import com.trading.contracts.common.PriceLevelEvent;
 import com.trading.contracts.market.DepthDiffEvent;
-import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.common.PriceLevelDto;
+import com.trading.mss.dto.market.DepthDiffDto;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,21 +15,21 @@ public final class DepthDiffAvroMapper {
     private DepthDiffAvroMapper() {}
 
     public static DepthDiffDto toDto(DepthDiffEvent avro) {
-        EventMetadata m = avro.getMetadata();
+        MetadataEvent metadataEvent = avro.getMetadata();
         MetadataDto metadata = new MetadataDto(
-                m.getSchemaVersion(),
-                m.getEventType(),
-                m.getExchange(),
-                m.getMarketType(),
-                m.getBase(),
-                m.getQuote(),
-                m.getSymbol(),
-                m.getInstrumentId(),
-                m.getEventId(),
-                m.getSourceStream(),
-                m.getExchangeTs(),
-                m.getReceivedTs(),
-                m.getProcessedTs());
+                metadataEvent.getSchemaVersion(),
+                metadataEvent.getEventType(),
+                metadataEvent.getExchange(),
+                metadataEvent.getMarketType(),
+                metadataEvent.getBase(),
+                metadataEvent.getQuote(),
+                metadataEvent.getSymbol(),
+                metadataEvent.getInstrumentId(),
+                metadataEvent.getEventId(),
+                metadataEvent.getSourceStream(),
+                metadataEvent.getExchangeTs(),
+                metadataEvent.getReceivedTs(),
+                metadataEvent.getProcessedTs());
 
         return new DepthDiffDto(
                 metadata,
@@ -41,12 +41,12 @@ public final class DepthDiffAvroMapper {
                 mapPriceLevels(avro.getAsks()));
     }
 
-    private static List<PriceLevelDto> mapPriceLevels(List<PriceLevel> levels) {
+    private static List<PriceLevelDto> mapPriceLevels(List<PriceLevelEvent> levels) {
         if (levels == null || levels.isEmpty()) {
             return List.of();
         }
         List<PriceLevelDto> out = new ArrayList<>(levels.size());
-        for (PriceLevel pl : levels) {
+        for (PriceLevelEvent pl : levels) {
             out.add(new PriceLevelDto(pl.getPrice(), pl.getQty()));
         }
         return out;
