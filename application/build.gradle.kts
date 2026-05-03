@@ -3,6 +3,7 @@ plugins {
 }
 
 dependencies {
+    api(libs.tradingCommon)
     api(libs.slf4jApi)
 
     compileOnly(libs.jakartaValidationApi)

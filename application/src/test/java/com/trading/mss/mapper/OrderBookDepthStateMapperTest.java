@@ -1,10 +1,10 @@
 package com.trading.mss.mapper;
 
+import com.trading.common.enums.BookSyncStatus;
 import com.trading.mss.domain.model.ScaledDecimal;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.common.PriceLevelDto;
-import com.trading.mss.dto.orderbook.BookSyncStatus;
 import com.trading.mss.dto.orderbook.OrderBookDepthStateDto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -103,8 +103,8 @@ class OrderBookDepthStateMapperTest {
 
         OrderBookDepthStateDto event = mapper.project(state, 5);
 
-        assertEquals("59827.95000000", event.bidLevels().get(0).price());
-        assertEquals("0.00551000", event.bidLevels().get(0).qty());
+        assertEquals("59827.95000000", event.bidLevels().getFirst().price());
+        assertEquals("0.00551000", event.bidLevels().getFirst().qty());
     }
 
     @Test
@@ -117,7 +117,7 @@ class OrderBookDepthStateMapperTest {
         OrderBookDepthStateDto event = mapper.project(state, 10);
 
         assertEquals(1, event.metadata().schemaVersion());
-        assertEquals("orderbook_l2_depth_state", event.metadata().eventType());
+        assertEquals("ORDERBOOK_DEPTH_STATE", event.metadata().eventType());
         assertEquals("binance", event.metadata().exchange());
         assertEquals("spot", event.metadata().marketType());
         assertEquals("BTCUSDT", event.metadata().symbol());
@@ -159,8 +159,8 @@ class OrderBookDepthStateMapperTest {
 
         OrderBookDepthStateDto event = mapper.project(state, 5);
 
-        assertEquals("1.50000000", event.bidLevels().get(0).qty());
-        assertEquals("2.75000000", event.askLevels().get(0).qty());
+        assertEquals("1.50000000", event.bidLevels().getFirst().qty());
+        assertEquals("2.75000000", event.askLevels().getFirst().qty());
     }
 
     private static SymbolState liveState() {

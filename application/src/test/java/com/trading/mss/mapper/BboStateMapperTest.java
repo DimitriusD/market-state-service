@@ -1,11 +1,11 @@
 package com.trading.mss.mapper;
 
+import com.trading.common.enums.BookSyncStatus;
 import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.ScaledDecimal;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.orderbook.BboStateDto;
-import com.trading.mss.dto.orderbook.BookSyncStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -124,7 +124,7 @@ class BboStateMapperTest {
         BboStateDto event = mapper.project(state).orElseThrow();
 
         assertEquals(1, event.metadata().schemaVersion());
-        assertEquals("bbo_state", event.metadata().eventType());
+        assertEquals("BBO_STATE", event.metadata().eventType());
         assertEquals("binance", event.metadata().exchange());
         assertEquals("spot", event.metadata().marketType());
         assertEquals("BTCUSDT", event.metadata().symbol());

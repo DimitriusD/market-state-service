@@ -1,5 +1,6 @@
 package com.trading.mss.service;
 
+import com.trading.common.enums.BookSyncStatus;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.ScaledDecimal;
 import com.trading.mss.domain.model.SymbolState;
@@ -12,7 +13,6 @@ import com.trading.mss.dto.KafkaMessageContext;
 import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.common.PriceLevelDto;
 import com.trading.mss.dto.orderbook.BboStateDto;
-import com.trading.mss.dto.orderbook.BookSyncStatus;
 import com.trading.mss.dto.orderbook.OrderBookDepthStateDto;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
 import com.trading.mss.port.output.PublishBboStatePort;
@@ -346,7 +346,7 @@ class ProcessDepthDiffServiceTest {
             assertEquals(1, bboPublisher.published.size());
             assertEquals(1, topNPublisher.published.size());
 
-            BboStateDto bbo = bboPublisher.published.get(0);
+            BboStateDto bbo = bboPublisher.published.getFirst();
             assertEquals("50000.00000000", bbo.bestBid().price());
             assertEquals("50001.00000000", bbo.bestAsk().price());
             assertEquals(BookSyncStatus.IN_SYNC, bbo.syncStatus());
@@ -453,7 +453,7 @@ class ProcessDepthDiffServiceTest {
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             assertEquals(1, topNPublisher.published.size());
-            OrderBookDepthStateDto depthState = topNPublisher.published.get(0);
+            OrderBookDepthStateDto depthState = topNPublisher.published.getFirst();
             assertEquals(PUBLISHED_LEVELS, depthState.publishedLevels());
             assertEquals(2, depthState.bidLevels().size());
             assertEquals(2, depthState.askLevels().size());
@@ -483,7 +483,7 @@ class ProcessDepthDiffServiceTest {
 
             assertFalse(bboPublisher.published.isEmpty());
             assertFalse(topNPublisher.published.isEmpty());
-            assertEquals("51000.00000000", bboPublisher.published.get(0).bestBid().price());
+            assertEquals("51000.00000000", bboPublisher.published.getFirst().bestBid().price());
         }
 
         @Test
@@ -493,7 +493,7 @@ class ProcessDepthDiffServiceTest {
                     List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
-            BboStateDto bbo = bboPublisher.published.get(0);
+            BboStateDto bbo = bboPublisher.published.getFirst();
             assertEquals("BTCUSDT", bbo.metadata().symbol());
             assertEquals("binance", bbo.metadata().exchange());
             assertEquals("spot", bbo.metadata().marketType());

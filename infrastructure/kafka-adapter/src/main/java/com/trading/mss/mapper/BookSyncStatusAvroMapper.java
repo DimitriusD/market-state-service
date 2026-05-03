@@ -6,7 +6,7 @@ public final class BookSyncStatusAvroMapper {
 
     private BookSyncStatusAvroMapper() {}
 
-    public static BookSyncStatus toWire(com.trading.mss.dto.orderbook.BookSyncStatus app) {
+    public static BookSyncStatus toWire(com.trading.common.enums.BookSyncStatus app) {
         if (app == null) {
             return BookSyncStatus.OUT_OF_SYNC;
         }

@@ -49,6 +49,7 @@ testcontainersJunit = { module = "org.testcontainers:junit-jupiter" }
 testcontainersPostgres = { module = "org.testcontainers:postgresql" }
 
 schemas = { module = "com.trading:trading-schemas", version = "1.0.0-SNAPSHOT" }
+tradingCommon = { module = "com.trading:trading-common", version = "1.0.0-SNAPSHOT" }
 kafkaAvroSerializer = { module = "io.confluent:kafka-avro-serializer", version.ref = "confluent" }
 
 [plugins]

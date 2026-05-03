@@ -1,12 +1,13 @@
 package com.trading.mss.mapper;
 
+import com.trading.common.enums.BookSyncStatus;
+import com.trading.common.enums.MarketEventType;
 import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.ScaledDecimal;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.common.PriceLevelDto;
 import com.trading.mss.dto.orderbook.BboStateDto;
-import com.trading.mss.dto.orderbook.BookSyncStatus;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -15,7 +16,6 @@ import java.util.Optional;
 public class BboStateMapper {
 
     private static final int SCHEMA_VERSION = 1;
-    private static final String EVENT_TYPE = "bbo_state";
 
     public Optional<BboStateDto> project(SymbolState state) {
         OrderBook book = state.getOrderBook();
@@ -50,7 +50,7 @@ public class BboStateMapper {
                 .divide(BigDecimal.valueOf(2), ScaledDecimal.SCALE_DIGITS, RoundingMode.HALF_UP)
                 .toPlainString();
 
-        MetadataDto metadata = StateEventMetadataFactory.from(state, SCHEMA_VERSION, EVENT_TYPE);
+        MetadataDto metadata = StateEventMetadataFactory.from(state, SCHEMA_VERSION, MarketEventType.BBO_STATE.name());
 
         BookSyncStatus syncStatus =
                 state.isTrusted() ? BookSyncStatus.IN_SYNC : BookSyncStatus.OUT_OF_SYNC;
