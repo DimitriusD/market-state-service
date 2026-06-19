@@ -50,6 +50,14 @@ public class LiveOrderBookUpdateService {
                 book.getBids().size(), book.getAsks().size(), book.bestBid(), book.bestAsk(),
                 ctx.partition(), ctx.offset(), ctx.key());
 
+        if (book.isCrossed()) {
+            log.warn("CROSSED_BOOK: symbol={} bestBid={} bestAsk={} localUpdateId={} U={} u={} partition={} offset={} key={} — entering resync",
+                    state.getSymbol(), book.bestBid(), book.bestAsk(), state.getLocalUpdateId(),
+                    event.firstUpdateId(), event.finalUpdateId(), ctx.partition(), ctx.offset(), ctx.key());
+            lifecycleService.enterResyncFromLive(event, state, ctx);
+            return;
+        }
+
         marketStatePublisher.publishProjectedStateIfLive(state);
     }
 

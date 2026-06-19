@@ -30,16 +30,13 @@ class ResilientBinanceSnapshotApiServiceTest {
         delegate.failWith(new BinanceRateLimitedException(429, Duration.ofSeconds(10)));
         var service = new ResilientBinanceSnapshotApiService(delegate, clock, config());
 
-        // First call reaches the delegate, throws 429, and arms the Retry-After gate.
         assertThrows(BinanceRateLimitedException.class, () -> service.load("BTCUSDT", 1000));
         assertEquals(1, delegate.calls);
 
-        // While the gate is open, further calls fail fast without any HTTP to Binance.
         assertThrows(BinanceRateLimitedException.class, () -> service.load("BTCUSDT", 1000));
         assertThrows(BinanceRateLimitedException.class, () -> service.load("ETHUSDT", 1000));
         assertEquals(1, delegate.calls);
 
-        // Once the advised window elapses, the delegate is consulted again.
         clock.advance(Duration.ofSeconds(10).toMillis() + 1);
         delegate.succeedWith(snapshot());
         OrderBookSnapshot result = service.load("BTCUSDT", 1000);
@@ -56,8 +53,6 @@ class ResilientBinanceSnapshotApiServiceTest {
         var service = new ResilientBinanceSnapshotApiService(delegate, clock, config());
 
         assertThrows(BinanceRateLimitedException.class, () -> service.load("BTCUSDT", 1000));
-        // No Retry-After ⇒ no gate ⇒ the next call still reaches the delegate (the circuit breaker
-        // handles the no-header case once the failure rate threshold is crossed).
         assertThrows(BinanceRateLimitedException.class, () -> service.load("BTCUSDT", 1000));
         assertEquals(2, delegate.calls);
     }

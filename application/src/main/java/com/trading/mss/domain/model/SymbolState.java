@@ -29,7 +29,6 @@ public class SymbolState {
     private long lastSnapshotUpdateId = -1;
     private boolean bootstrapInProgress = false;
     private long lastBootstrapAttemptTs = 0;
-    /** In-flight async snapshot fetch. Read/written only by the consumer thread; completed by the fetcher. */
     private transient CompletableFuture<OrderBookSnapshot> pendingSnapshot;
     private long lastEventExchangeTs;
     private long lastEventReceivedTs;

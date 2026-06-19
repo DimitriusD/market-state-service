@@ -60,7 +60,6 @@ class ProcessDepthDiffServiceTest {
         snapshotPort = new StubAsyncSnapshotPort();
         bboPublisher = new RecordingBboPublisher();
         topNPublisher = new RecordingTopNPublisher();
-        // Start at a realistic epoch so the first bootstrap (lastBootstrapAttemptTs=0) is never gated.
         clock = new MutableClock(1_700_000_000_000L);
         service = createService(MAX_BUFFERED_EVENTS);
     }
@@ -314,6 +313,46 @@ class ProcessDepthDiffServiceTest {
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
             assertFalse(state.isTrusted());
         }
+
+        @Test
+        void crossedBookAfterApply_goesResyncingWithoutPublishing() {
+            bboPublisher.published.clear();
+            topNPublisher.published.clear();
+
+            service.process(
+                    event(106, 110,
+                            List.of(new PriceLevelDto("50002.00", "1.0")),
+                            List.of()),
+                    ctx(2));
+
+            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
+            assertFalse(state.isTrusted());
+            assertTrue(bboPublisher.published.isEmpty(), "crossed book must not publish BBO");
+            assertTrue(topNPublisher.published.isEmpty(), "crossed book must not publish depth");
+        }
+
+        @Test
+        void crossedBook_recoversViaResyncOnNextSnapshot() {
+            service.process(
+                    event(106, 110,
+                            List.of(new PriceLevelDto("50002.00", "1.0")),
+                            List.of()),
+                    ctx(2));
+            assertEquals(SymbolStateStatus.RESYNCING,
+                    stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
+
+            snapshotPort.setSnapshot(snapshot(300,
+                    List.of(new PriceLevelDto("51000.00", "1.0")),
+                    List.of(new PriceLevelDto("51001.00", "1.0"))));
+            clock.advance(BOOTSTRAP_COOLDOWN_MS + 1);
+            service.process(event(298, 310, List.of(), List.of()), ctx(3));
+
+            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            assertEquals(SymbolStateStatus.LIVE, state.getStatus());
+            assertTrue(state.isTrusted());
+            assertEquals(310, state.getLocalUpdateId());
+        }
     }
 
     @Nested
@@ -349,7 +388,6 @@ class ProcessDepthDiffServiceTest {
 
         @Test
         void failingBootstrap_doesNotRetryWithinCooldown_keepsBuffering() {
-            // Every snapshot load throws (simulating Binance 429/418).
             snapshotPort.setException(new RuntimeException("HTTP 429"));
 
             service.process(event(100, 110, List.of(), List.of()), ctx(1));
@@ -358,7 +396,6 @@ class ProcessDepthDiffServiceTest {
             int loadsAfterFirstAttempt = snapshotPort.getLoadCalls();
             assertTrue(loadsAfterFirstAttempt > 0);
 
-            // A flood of further diffs arrives within the cooldown window: none must hit Binance.
             service.process(event(111, 120, List.of(), List.of()), ctx(2));
             service.process(event(121, 130, List.of(), List.of()), ctx(3));
             service.process(event(131, 140, List.of(), List.of()), ctx(4));
@@ -409,20 +446,17 @@ class ProcessDepthDiffServiceTest {
                     List.of(new PriceLevelDto("50000.00", "1.0")),
                     List.of(new PriceLevelDto("50001.00", "1.0"))));
 
-            // First event submits the fetch but does NOT block; the future is still in flight.
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(SymbolStateStatus.SNAPSHOT_LOADING, state.getStatus());
             assertTrue(state.isBootstrapInProgress());
             assertEquals(1, snapshotPort.getLoadCalls());
 
-            // Diffs that arrive while loading are buffered, not applied, and do not re-submit.
             service.process(event(106, 110, List.of(), List.of()), ctx(2));
             assertEquals(SymbolStateStatus.SNAPSHOT_LOADING,
                     stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
             assertEquals(1, snapshotPort.getLoadCalls());
 
-            // Snapshot completes in the background; the next consumer-thread event applies it.
             snapshotPort.completePending();
             service.process(event(111, 115, List.of(), List.of()), ctx(3));
 
@@ -689,12 +723,6 @@ class ProcessDepthDiffServiceTest {
         }
     }
 
-    /**
-     * Async snapshot stub. By default it completes futures synchronously (so most tests behave like
-     * the previous blocking flow). With {@code setManualCompletion(true)} it returns un-completed
-     * futures that the test completes via {@link #completePending()}, exercising the real async path
-     * where the snapshot arrives only on a later consumer-thread event.
-     */
     static class StubAsyncSnapshotPort implements AsyncSnapshotPort {
         private OrderBookSnapshot snapshot;
         private RuntimeException exception;

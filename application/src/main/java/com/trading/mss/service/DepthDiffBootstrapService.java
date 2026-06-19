@@ -1,6 +1,7 @@
 package com.trading.mss.service;
 
 import com.trading.mss.domain.model.BufferedDepthDiff;
+import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.SyncDecision;
 import com.trading.mss.domain.model.SymbolState;
@@ -32,12 +33,6 @@ public class DepthDiffBootstrapService {
     private final Clock clock;
     private final long bootstrapCooldownMs;
 
-    /**
-     * Phase A — runs on the consumer thread and does NOT block. Submits the snapshot fetch to the
-     * background fetcher and returns; incoming diffs keep buffering meanwhile (handled by
-     * {@code BootstrapPhaseStateHandler}). The result is applied later via
-     * {@link #tryApplyPendingSnapshot}.
-     */
     public void startBootstrapIfNeeded(SymbolState state, KafkaMessageContext ctx) {
         if (state.isBootstrapInProgress()) {
             stateStore.save(state);
@@ -47,9 +42,6 @@ public class DepthDiffBootstrapService {
         long now = clock.millis();
         long sinceLastAttemptMs = now - state.getLastBootstrapAttemptTs();
         if (sinceLastAttemptMs < bootstrapCooldownMs) {
-            // Throttle bootstrap restarts per symbol so a failing snapshot (e.g. Binance 429/418)
-            // cannot trigger a fresh fetch on every incoming diff. Keep buffering instead;
-            // a later event past the cooldown will retry the snapshot.
             log.debug("BOOTSTRAP_COOLDOWN: symbol={} sinceLastAttemptMs={} cooldownMs={} bufferSize={} status={} — continuing to buffer",
                     state.getSymbol(), sinceLastAttemptMs, bootstrapCooldownMs,
                     state.getBufferedEvents().size(), state.getStatus());
@@ -66,16 +58,9 @@ public class DepthDiffBootstrapService {
         log.info("SNAPSHOT_FETCH_SUBMITTED: symbol={} depthLimit={} bufferSize={}",
                 state.getSymbol(), snapshotDepthLimit, state.getBufferedEvents().size());
 
-        // If the fetch already completed (fast path / caller-runs executor), apply now without
-        // waiting for the next event.
         tryApplyPendingSnapshot(state, ctx);
     }
 
-    /**
-     * Phase B — runs on the consumer thread. If the async snapshot fetch has completed, consume the
-     * result and finish the bootstrap (apply snapshot + replay buffer → LIVE, or RESYNCING on any
-     * failure / gap). No-op while the fetch is still in flight.
-     */
     public void tryApplyPendingSnapshot(SymbolState state, KafkaMessageContext ctx) {
         CompletableFuture<OrderBookSnapshot> future = state.getPendingSnapshot();
         if (future == null || !future.isDone()) {
@@ -125,8 +110,7 @@ public class DepthDiffBootstrapService {
                 state.getSymbol(), snapshot.lastUpdateId(), bufferBefore, bufferAfter);
 
         if (state.getBufferedEvents().isEmpty()) {
-            lifecycleService.enterLiveFromSnapshot(state, ctx, true);
-            marketStatePublisher.publishProjectedStateIfLive(state);
+            finishBootstrapToLive(state, ctx, true);
             return;
         }
 
@@ -142,7 +126,18 @@ public class DepthDiffBootstrapService {
             return;
         }
 
-        lifecycleService.enterLiveFromSnapshot(state, ctx, false);
+        finishBootstrapToLive(state, ctx, false);
+    }
+
+    private void finishBootstrapToLive(SymbolState state, KafkaMessageContext ctx, boolean setOffsetFromCurrentContext) {
+        OrderBook book = state.getOrderBook();
+        if (book.isCrossed()) {
+            log.warn("CROSSED_BOOK after bootstrap: symbol={} bestBid={} bestAsk={} snapshotLastUpdateId={} — entering resync instead of going LIVE",
+                    state.getSymbol(), book.bestBid(), book.bestAsk(), state.getLastSnapshotUpdateId());
+            lifecycleService.enterResyncing(state, "crossed_book_after_bootstrap", ctx);
+            return;
+        }
+        lifecycleService.enterLiveFromSnapshot(state, ctx, setOffsetFromCurrentContext);
         marketStatePublisher.publishProjectedStateIfLive(state);
     }
 

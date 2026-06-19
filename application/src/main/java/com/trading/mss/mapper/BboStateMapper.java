@@ -8,11 +8,13 @@ import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.common.PriceLevelDto;
 import com.trading.mss.dto.orderbook.BboStateDto;
+import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Optional;
 
+@Slf4j
 public class BboStateMapper {
 
     private static final int SCHEMA_VERSION = 1;
@@ -28,11 +30,9 @@ public class BboStateMapper {
         Long bestAskPrice = book.bestAsk();
 
         if (bestBidPrice > bestAskPrice) {
-            throw new IllegalStateException(
-                    "Crossed order book: bestBid=%s > bestAsk=%s for symbol=%s".formatted(
-                            ScaledDecimal.format(bestBidPrice),
-                            ScaledDecimal.format(bestAskPrice),
-                            state.getSymbol()));
+            log.warn("Crossed order book reached BBO projection: bestBid={} bestAsk={} symbol={} — skipping publish",
+                    ScaledDecimal.format(bestBidPrice), ScaledDecimal.format(bestAskPrice), state.getSymbol());
+            return Optional.empty();
         }
 
         PriceLevelDto bestBid = new PriceLevelDto(

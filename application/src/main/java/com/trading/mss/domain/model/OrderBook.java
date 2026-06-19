@@ -33,6 +33,10 @@ public class OrderBook {
         return !asks.isEmpty();
     }
 
+    public boolean isCrossed() {
+        return hasBids() && hasAsks() && bids.firstKey() > asks.firstKey();
+    }
+
     public void clear() {
         bids.clear();
         asks.clear();

@@ -104,12 +104,14 @@ class BboStateMapperTest {
     }
 
     @Test
-    void throwsWhenBookCrossed() {
+    void returnsEmptyWhenBookCrossed() {
         SymbolState state = liveState();
         state.getOrderBook().getBids().put(ScaledDecimal.parse("50002.00"), ScaledDecimal.parse("1.0"));
         state.getOrderBook().getAsks().put(ScaledDecimal.parse("50000.00"), ScaledDecimal.parse("1.0"));
 
-        assertThrows(IllegalStateException.class, () -> mapper.project(state));
+        Optional<BboStateDto> result = mapper.project(state);
+
+        assertTrue(result.isEmpty());
     }
 
     @Test

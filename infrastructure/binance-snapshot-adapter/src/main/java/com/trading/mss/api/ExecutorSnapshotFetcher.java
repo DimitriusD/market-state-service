@@ -10,15 +10,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadLocalRandom;
 
-/**
- * {@link AsyncSnapshotPort} backed by an {@link Executor}, so the blocking Binance HTTP call never
- * runs on the Kafka consumer thread. Owns the retry/backoff loop (safe to sleep here) and delegates
- * the actual call to the resilient {@link BinanceSpotSnapshotApiService} (circuit breaker + rate
- * limiter + Retry-After gate).
- *
- * <p>Touches no {@code SymbolState}: it only fetches and returns an immutable snapshot, leaving all
- * state mutation to the consumer thread that drains the future.
- */
 @Slf4j
 public class ExecutorSnapshotFetcher implements AsyncSnapshotPort {
 
@@ -51,8 +42,6 @@ public class ExecutorSnapshotFetcher implements AsyncSnapshotPort {
             try {
                 return snapshotApi.load(symbol, depthLimit);
             } catch (BinanceRateLimitedException | CallNotPermittedException e) {
-                // Rate limited / circuit open: retrying now would only hammer Binance (or fast-fail).
-                // Give up immediately and let the per-symbol bootstrap cooldown schedule the next try.
                 log.warn("Snapshot fetch short-circuited: symbol={} attempt={}/{} reason={}",
                         symbol, attempt, maxRetries, e.getClass().getSimpleName());
                 throw e;

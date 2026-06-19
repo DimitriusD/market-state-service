@@ -111,7 +111,6 @@ public class InfrastructureConfig {
         return new ResilientBinanceSnapshotApiService(httpClient, clock, resilienceConfig);
     }
 
-    /** Pool for off-consumer-thread snapshot fetches. Spring calls {@code shutdown()} on context close. */
     @Bean
     public ExecutorService snapshotFetchExecutor(
             @Value("${app.bootstrap.snapshot-fetch-pool-size:4}") int poolSize) {

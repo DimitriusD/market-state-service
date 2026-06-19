@@ -15,7 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ExecutorSnapshotFetcherTest {
 
-    /** Caller-runs executor: the fetch runs synchronously on the test thread. */
     private static final Executor DIRECT = Runnable::run;
 
     @Test
@@ -28,7 +27,7 @@ class ExecutorSnapshotFetcherTest {
         OrderBookSnapshot result = fetcher.fetch("BTCUSDT", 1000).join();
 
         assertNotNull(result);
-        assertEquals(3, api.calls); // two failures + one success
+        assertEquals(3, api.calls);
     }
 
     @Test
@@ -52,7 +51,7 @@ class ExecutorSnapshotFetcherTest {
         CompletableFuture<OrderBookSnapshot> future = fetcher.fetch("BTCUSDT", 1000);
 
         assertTrue(future.isCompletedExceptionally());
-        assertEquals(1, api.calls); // rate-limit short-circuits: no retry
+        assertEquals(1, api.calls);
     }
 
     private static OrderBookSnapshot snapshot() {

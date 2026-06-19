@@ -27,7 +27,6 @@ public class BootstrapPhaseStateHandler implements DepthDiffStateHandler {
             return;
         }
         stateStore.save(state);
-        // If the async snapshot fetch has completed, finish the bootstrap on this (consumer) thread.
         bootstrapService.tryApplyPendingSnapshot(state, context);
     }
 }
