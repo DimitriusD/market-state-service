@@ -5,6 +5,7 @@ import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.KafkaMessageContext;
 import com.trading.mss.port.output.SymbolStateStorePort;
+import com.trading.mss.service.DepthDiffBootstrapService;
 import com.trading.mss.service.DepthDiffBufferService;
 import lombok.RequiredArgsConstructor;
 
@@ -12,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 public class BootstrapPhaseStateHandler implements DepthDiffStateHandler {
 
     private final DepthDiffBufferService bufferService;
+    private final DepthDiffBootstrapService bootstrapService;
     private final SymbolStateStorePort stateStore;
 
     @Override
@@ -25,5 +27,7 @@ public class BootstrapPhaseStateHandler implements DepthDiffStateHandler {
             return;
         }
         stateStore.save(state);
+        // If the async snapshot fetch has completed, finish the bootstrap on this (consumer) thread.
+        bootstrapService.tryApplyPendingSnapshot(state, context);
     }
 }

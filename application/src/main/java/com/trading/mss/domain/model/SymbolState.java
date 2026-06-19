@@ -5,6 +5,7 @@ import lombok.Setter;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.concurrent.CompletableFuture;
 
 @Getter
 @Setter
@@ -27,6 +28,9 @@ public class SymbolState {
     private Long firstBufferedUpdateId = null;
     private long lastSnapshotUpdateId = -1;
     private boolean bootstrapInProgress = false;
+    private long lastBootstrapAttemptTs = 0;
+    /** In-flight async snapshot fetch. Read/written only by the consumer thread; completed by the fetcher. */
+    private transient CompletableFuture<OrderBookSnapshot> pendingSnapshot;
     private long lastEventExchangeTs;
     private long lastEventReceivedTs;
     private long lastEventProcessedTs;

@@ -7,44 +7,108 @@ import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.KafkaMessageContext;
-import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
+import com.trading.mss.port.output.AsyncSnapshotPort;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.Clock;
 import java.util.Deque;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 @Slf4j
 @RequiredArgsConstructor
 public class DepthDiffBootstrapService {
 
-    private static final int MAX_SNAPSHOT_RETRIES = 3;
-
     private final OrderBookApplier orderBookApplier;
     private final BinanceSpotSyncPolicy syncPolicy;
-    private final BinanceSpotSnapshotApiService snapshotPort;
+    private final AsyncSnapshotPort asyncSnapshotPort;
     private final SymbolStateStorePort stateStore;
     private final SymbolStateLifecycleService lifecycleService;
     private final MarketStatePublisher marketStatePublisher;
     private final int snapshotDepthLimit;
+    private final Clock clock;
+    private final long bootstrapCooldownMs;
 
+    /**
+     * Phase A — runs on the consumer thread and does NOT block. Submits the snapshot fetch to the
+     * background fetcher and returns; incoming diffs keep buffering meanwhile (handled by
+     * {@code BootstrapPhaseStateHandler}). The result is applied later via
+     * {@link #tryApplyPendingSnapshot}.
+     */
     public void startBootstrapIfNeeded(SymbolState state, KafkaMessageContext ctx) {
         if (state.isBootstrapInProgress()) {
             stateStore.save(state);
             return;
         }
 
+        long now = clock.millis();
+        long sinceLastAttemptMs = now - state.getLastBootstrapAttemptTs();
+        if (sinceLastAttemptMs < bootstrapCooldownMs) {
+            // Throttle bootstrap restarts per symbol so a failing snapshot (e.g. Binance 429/418)
+            // cannot trigger a fresh fetch on every incoming diff. Keep buffering instead;
+            // a later event past the cooldown will retry the snapshot.
+            log.debug("BOOTSTRAP_COOLDOWN: symbol={} sinceLastAttemptMs={} cooldownMs={} bufferSize={} status={} — continuing to buffer",
+                    state.getSymbol(), sinceLastAttemptMs, bootstrapCooldownMs,
+                    state.getBufferedEvents().size(), state.getStatus());
+            stateStore.save(state);
+            return;
+        }
+
+        state.setLastBootstrapAttemptTs(now);
         state.setBootstrapInProgress(true);
+        state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
+        state.setPendingSnapshot(asyncSnapshotPort.fetch(state.getSymbol(), snapshotDepthLimit));
         stateStore.save(state);
 
-        runBootstrap(state, ctx);
+        log.info("SNAPSHOT_FETCH_SUBMITTED: symbol={} depthLimit={} bufferSize={}",
+                state.getSymbol(), snapshotDepthLimit, state.getBufferedEvents().size());
+
+        // If the fetch already completed (fast path / caller-runs executor), apply now without
+        // waiting for the next event.
+        tryApplyPendingSnapshot(state, ctx);
     }
 
-    public void runBootstrap(SymbolState state, KafkaMessageContext ctx) {
-        OrderBookSnapshot snapshot = loadFreshSnapshot(state, ctx);
+    /**
+     * Phase B — runs on the consumer thread. If the async snapshot fetch has completed, consume the
+     * result and finish the bootstrap (apply snapshot + replay buffer → LIVE, or RESYNCING on any
+     * failure / gap). No-op while the fetch is still in flight.
+     */
+    public void tryApplyPendingSnapshot(SymbolState state, KafkaMessageContext ctx) {
+        CompletableFuture<OrderBookSnapshot> future = state.getPendingSnapshot();
+        if (future == null || !future.isDone()) {
+            return;
+        }
+        state.setPendingSnapshot(null);
+
+        OrderBookSnapshot snapshot;
+        try {
+            snapshot = future.join();
+        } catch (CompletionException | CancellationException e) {
+            Throwable cause = e instanceof CompletionException && e.getCause() != null ? e.getCause() : e;
+            log.error("Snapshot fetch failed: symbol={} error={}", state.getSymbol(), cause.getMessage());
+            lifecycleService.enterResyncing(state, "snapshot_load_failed", ctx);
+            return;
+        }
+
         if (snapshot == null) {
-            state.setBootstrapInProgress(false);
-            stateStore.save(state);
+            log.error("Snapshot fetch returned null: symbol={}", state.getSymbol());
+            lifecycleService.enterResyncing(state, "snapshot_load_failed", ctx);
+            return;
+        }
+
+        applySnapshotAndReplay(state, snapshot, ctx);
+    }
+
+    private void applySnapshotAndReplay(SymbolState state, OrderBookSnapshot snapshot, KafkaMessageContext ctx) {
+        Long firstBufferedUpdateId = state.getFirstBufferedUpdateId();
+        if (firstBufferedUpdateId != null
+                && syncPolicy.isSnapshotTooOld(snapshot.lastUpdateId(), firstBufferedUpdateId)) {
+            log.warn("Snapshot too old: symbol={} snapshotLastUpdateId={} firstBufferedUpdateId={}",
+                    state.getSymbol(), snapshot.lastUpdateId(), firstBufferedUpdateId);
+            lifecycleService.enterResyncing(state, "snapshot_too_old", ctx);
             return;
         }
 
@@ -80,46 +144,6 @@ public class DepthDiffBootstrapService {
 
         lifecycleService.enterLiveFromSnapshot(state, ctx, false);
         marketStatePublisher.publishProjectedStateIfLive(state);
-    }
-
-    public OrderBookSnapshot loadFreshSnapshot(SymbolState state, KafkaMessageContext ctx) {
-        state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
-        stateStore.save(state);
-
-        OrderBookSnapshot snapshot = null;
-        for (int attempt = 1; attempt <= MAX_SNAPSHOT_RETRIES; attempt++) {
-            try {
-                snapshot = snapshotPort.load(state.getSymbol(), snapshotDepthLimit);
-            } catch (Exception e) {
-                log.error("Snapshot load failed: symbol={} attempt={}/{} error={}",
-                        state.getSymbol(), attempt, MAX_SNAPSHOT_RETRIES, e.getMessage());
-                if (attempt == MAX_SNAPSHOT_RETRIES) {
-                    lifecycleService.enterResyncing(state, "snapshot_load_failed", ctx);
-                    return null;
-                }
-                continue;
-            }
-
-            log.info("SNAPSHOT_LOADED: symbol={} attempt={}/{} depthLimit={} snapshotLastUpdateId={}",
-                    state.getSymbol(), attempt, MAX_SNAPSHOT_RETRIES,
-                    snapshotDepthLimit, snapshot.lastUpdateId());
-
-            Long firstBufferedUpdateId = state.getFirstBufferedUpdateId();
-            if (firstBufferedUpdateId == null
-                    || !syncPolicy.isSnapshotTooOld(snapshot.lastUpdateId(), firstBufferedUpdateId)) {
-                return snapshot;
-            }
-
-            log.warn("Snapshot too old: symbol={} snapshotLastUpdateId={} firstBufferedUpdateId={}",
-                    state.getSymbol(), snapshot.lastUpdateId(), state.getFirstBufferedUpdateId());
-
-            if (attempt == MAX_SNAPSHOT_RETRIES) {
-                lifecycleService.enterResyncing(state, "snapshot_too_old_after_retries", ctx);
-                return null;
-            }
-        }
-
-        return snapshot;
     }
 
     public void discardStaleBufferedEvents(SymbolState state, long snapshotLastUpdateId) {

@@ -62,6 +62,7 @@ public class SymbolStateLifecycleService {
         state.setFirstBufferedUpdateId(null);
         state.setLastSnapshotUpdateId(-1);
         state.setBootstrapInProgress(false);
+        state.setPendingSnapshot(null);
         state.setTrusted(false);
     }
 }

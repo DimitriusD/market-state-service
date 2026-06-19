@@ -14,7 +14,7 @@ import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.common.PriceLevelDto;
 import com.trading.mss.dto.orderbook.BboStateDto;
 import com.trading.mss.dto.orderbook.OrderBookDepthStateDto;
-import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
+import com.trading.mss.port.output.AsyncSnapshotPort;
 import com.trading.mss.port.output.PublishBboStatePort;
 import com.trading.mss.port.output.PublishOrderBookDepthStatePort;
 import com.trading.mss.port.output.SymbolStateStorePort;
@@ -28,8 +28,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -40,19 +45,23 @@ class ProcessDepthDiffServiceTest {
     private static final int SNAPSHOT_DEPTH_LIMIT = 1000;
     private static final int MAX_BUFFERED_EVENTS = 10;
     private static final int PUBLISHED_LEVELS = 10;
+    private static final long BOOTSTRAP_COOLDOWN_MS = 5000;
 
     private StubSymbolStateStore stateStore;
-    private StubSnapshotPort snapshotPort;
+    private StubAsyncSnapshotPort snapshotPort;
     private RecordingBboPublisher bboPublisher;
     private RecordingTopNPublisher topNPublisher;
+    private MutableClock clock;
     private ProcessDepthDiffService service;
 
     @BeforeEach
     void setUp() {
         stateStore = new StubSymbolStateStore();
-        snapshotPort = new StubSnapshotPort();
+        snapshotPort = new StubAsyncSnapshotPort();
         bboPublisher = new RecordingBboPublisher();
         topNPublisher = new RecordingTopNPublisher();
+        // Start at a realistic epoch so the first bootstrap (lastBootstrapAttemptTs=0) is never gated.
+        clock = new MutableClock(1_700_000_000_000L);
         service = createService(MAX_BUFFERED_EVENTS);
     }
 
@@ -81,12 +90,14 @@ class ProcessDepthDiffServiceTest {
                 stateStore,
                 lifecycleService,
                 marketStatePublisher,
-                SNAPSHOT_DEPTH_LIMIT
+                SNAPSHOT_DEPTH_LIMIT,
+                clock,
+                BOOTSTRAP_COOLDOWN_MS
         );
         DepthDiffBufferService bufferService = new DepthDiffBufferService(lifecycleService, maxBufferedEvents);
 
         BootstrapPhaseStateHandler bootstrapPhaseHandler =
-                new BootstrapPhaseStateHandler(bufferService, stateStore);
+                new BootstrapPhaseStateHandler(bufferService, depthDiffBootstrapService, stateStore);
 
         DepthDiffStateHandlerRegistry registry = new DepthDiffStateHandlerRegistry(List.of(
                 new InitDepthDiffStateHandler(bufferService, depthDiffBootstrapService),
@@ -322,6 +333,7 @@ class ProcessDepthDiffServiceTest {
             snapshotPort.setSnapshot(snapshot(300,
                     List.of(new PriceLevelDto("51000.00", "1.0")),
                     List.of(new PriceLevelDto("51001.00", "1.0"))));
+            clock.advance(BOOTSTRAP_COOLDOWN_MS + 1);
             service.process(event(298, 310, List.of(), List.of()), ctx(3));
 
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
@@ -329,6 +341,113 @@ class ProcessDepthDiffServiceTest {
             assertTrue(state.isTrusted());
             assertEquals(310, state.getLocalUpdateId());
             assertEquals(300, state.getLastSnapshotUpdateId());
+        }
+    }
+
+    @Nested
+    class BootstrapCooldown {
+
+        @Test
+        void failingBootstrap_doesNotRetryWithinCooldown_keepsBuffering() {
+            // Every snapshot load throws (simulating Binance 429/418).
+            snapshotPort.setException(new RuntimeException("HTTP 429"));
+
+            service.process(event(100, 110, List.of(), List.of()), ctx(1));
+            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
+            int loadsAfterFirstAttempt = snapshotPort.getLoadCalls();
+            assertTrue(loadsAfterFirstAttempt > 0);
+
+            // A flood of further diffs arrives within the cooldown window: none must hit Binance.
+            service.process(event(111, 120, List.of(), List.of()), ctx(2));
+            service.process(event(121, 130, List.of(), List.of()), ctx(3));
+            service.process(event(131, 140, List.of(), List.of()), ctx(4));
+
+            assertEquals(loadsAfterFirstAttempt, snapshotPort.getLoadCalls(),
+                    "no new snapshot HTTP calls should happen during the cooldown");
+            SymbolState during = stateStore.loadOrCreate("BTCUSDT", "binance");
+            assertEquals(SymbolStateStatus.BUFFERING_DIFFS, during.getStatus());
+            assertFalse(during.getBufferedEvents().isEmpty());
+        }
+
+        @Test
+        void bootstrapRetried_afterCooldownElapses() {
+            snapshotPort.setException(new RuntimeException("HTTP 429"));
+            service.process(event(100, 110, List.of(), List.of()), ctx(1));
+            int loadsAfterFirstAttempt = snapshotPort.getLoadCalls();
+
+            service.process(event(111, 120, List.of(), List.of()), ctx(2));
+            assertEquals(loadsAfterFirstAttempt, snapshotPort.getLoadCalls());
+
+            clock.advance(BOOTSTRAP_COOLDOWN_MS + 1);
+            service.process(event(121, 130, List.of(), List.of()), ctx(3));
+
+            assertTrue(snapshotPort.getLoadCalls() > loadsAfterFirstAttempt,
+                    "snapshot should be retried once the cooldown has elapsed");
+        }
+
+        @Test
+        void firstBootstrap_isNotGated() {
+            snapshotPort.setSnapshot(snapshot(100,
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
+
+            service.process(event(98, 105, List.of(), List.of()), ctx(1));
+
+            assertEquals(SymbolStateStatus.LIVE,
+                    stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
+        }
+    }
+
+    @Nested
+    class AsyncBootstrap {
+
+        @Test
+        void snapshotLoadsAsync_appliedOnLaterEvent_notWhileInFlight() {
+            snapshotPort.setManualCompletion(true);
+            snapshotPort.setSnapshot(snapshot(100,
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
+
+            // First event submits the fetch but does NOT block; the future is still in flight.
+            service.process(event(98, 105, List.of(), List.of()), ctx(1));
+            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            assertEquals(SymbolStateStatus.SNAPSHOT_LOADING, state.getStatus());
+            assertTrue(state.isBootstrapInProgress());
+            assertEquals(1, snapshotPort.getLoadCalls());
+
+            // Diffs that arrive while loading are buffered, not applied, and do not re-submit.
+            service.process(event(106, 110, List.of(), List.of()), ctx(2));
+            assertEquals(SymbolStateStatus.SNAPSHOT_LOADING,
+                    stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
+            assertEquals(1, snapshotPort.getLoadCalls());
+
+            // Snapshot completes in the background; the next consumer-thread event applies it.
+            snapshotPort.completePending();
+            service.process(event(111, 115, List.of(), List.of()), ctx(3));
+
+            SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
+            assertEquals(SymbolStateStatus.LIVE, after.getStatus());
+            assertTrue(after.isTrusted());
+            assertEquals(115, after.getLocalUpdateId());
+            assertEquals(100, after.getLastSnapshotUpdateId());
+        }
+
+        @Test
+        void asyncFetchFailure_goesResyncing() {
+            snapshotPort.setManualCompletion(true);
+            snapshotPort.setException(new RuntimeException("connection reset"));
+
+            service.process(event(100, 110, List.of(), List.of()), ctx(1));
+            assertEquals(SymbolStateStatus.SNAPSHOT_LOADING,
+                    stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
+
+            snapshotPort.completePending();
+            service.process(event(111, 120, List.of(), List.of()), ctx(2));
+
+            SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
+            assertEquals(SymbolStateStatus.RESYNCING, after.getStatus());
+            assertFalse(after.isTrusted());
         }
     }
 
@@ -479,6 +598,7 @@ class ProcessDepthDiffServiceTest {
             snapshotPort.setSnapshot(snapshot(300,
                     List.of(new PriceLevelDto("51000.00", "1.0")),
                     List.of(new PriceLevelDto("51001.00", "1.0"))));
+            clock.advance(BOOTSTRAP_COOLDOWN_MS + 1);
             service.process(event(298, 310, List.of(), List.of()), ctx(3));
 
             assertFalse(bboPublisher.published.isEmpty());
@@ -523,6 +643,38 @@ class ProcessDepthDiffServiceTest {
         return new KafkaMessageContext("BTCUSDT", 0, offset);
     }
 
+    static final class MutableClock extends Clock {
+        private long millis;
+
+        MutableClock(long startMillis) {
+            this.millis = startMillis;
+        }
+
+        void advance(long deltaMillis) {
+            this.millis += deltaMillis;
+        }
+
+        @Override
+        public long millis() {
+            return millis;
+        }
+
+        @Override
+        public Instant instant() {
+            return Instant.ofEpochMilli(millis);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+    }
+
     static class StubSymbolStateStore implements SymbolStateStorePort {
         private final ConcurrentMap<String, SymbolState> states = new ConcurrentHashMap<>();
 
@@ -537,10 +689,18 @@ class ProcessDepthDiffServiceTest {
         }
     }
 
-    static class StubSnapshotPort implements BinanceSpotSnapshotApiService {
+    /**
+     * Async snapshot stub. By default it completes futures synchronously (so most tests behave like
+     * the previous blocking flow). With {@code setManualCompletion(true)} it returns un-completed
+     * futures that the test completes via {@link #completePending()}, exercising the real async path
+     * where the snapshot arrives only on a later consumer-thread event.
+     */
+    static class StubAsyncSnapshotPort implements AsyncSnapshotPort {
         private OrderBookSnapshot snapshot;
         private RuntimeException exception;
         private int loadCalls;
+        private boolean manualCompletion;
+        private final List<CompletableFuture<OrderBookSnapshot>> pending = new ArrayList<>();
 
         void setSnapshot(OrderBookSnapshot snapshot) {
             this.snapshot = snapshot;
@@ -552,15 +712,37 @@ class ProcessDepthDiffServiceTest {
             this.snapshot = null;
         }
 
+        void setManualCompletion(boolean manualCompletion) {
+            this.manualCompletion = manualCompletion;
+        }
+
         int getLoadCalls() {
             return loadCalls;
         }
 
+        void completePending() {
+            for (CompletableFuture<OrderBookSnapshot> future : pending) {
+                if (exception != null) {
+                    future.completeExceptionally(exception);
+                } else {
+                    future.complete(snapshot);
+                }
+            }
+            pending.clear();
+        }
+
         @Override
-        public OrderBookSnapshot load(String symbol, int depthLimit) {
+        public CompletableFuture<OrderBookSnapshot> fetch(String symbol, int depthLimit) {
             loadCalls++;
-            if (exception != null) throw exception;
-            return snapshot;
+            if (manualCompletion) {
+                CompletableFuture<OrderBookSnapshot> future = new CompletableFuture<>();
+                pending.add(future);
+                return future;
+            }
+            if (exception != null) {
+                return CompletableFuture.failedFuture(exception);
+            }
+            return CompletableFuture.completedFuture(snapshot);
         }
     }
 
