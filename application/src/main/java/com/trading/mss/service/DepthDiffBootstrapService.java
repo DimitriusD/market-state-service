@@ -2,6 +2,7 @@ package com.trading.mss.service;
 
 import com.trading.mss.domain.model.BufferedDepthDiff;
 import com.trading.mss.domain.model.OrderBook;
+import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.SyncDecision;
 import com.trading.mss.domain.model.SymbolState;
@@ -52,6 +53,7 @@ public class DepthDiffBootstrapService {
         state.setLastBootstrapAttemptTs(now);
         state.setBootstrapInProgress(true);
         state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
+        state.incrementSnapshotRetryCount();
         state.setPendingSnapshot(asyncSnapshotPort.fetch(state.getSymbol(), snapshotDepthLimit));
         stateStore.save(state);
 
@@ -74,13 +76,13 @@ public class DepthDiffBootstrapService {
         } catch (CompletionException | CancellationException e) {
             Throwable cause = e instanceof CompletionException && e.getCause() != null ? e.getCause() : e;
             log.error("Snapshot fetch failed: symbol={} error={}", state.getSymbol(), cause.getMessage());
-            lifecycleService.enterResyncing(state, "snapshot_load_failed", ctx);
+            lifecycleService.enterResyncing(state, OrderBookReason.SNAPSHOT_LOAD_FAILED, ctx);
             return;
         }
 
         if (snapshot == null) {
             log.error("Snapshot fetch returned null: symbol={}", state.getSymbol());
-            lifecycleService.enterResyncing(state, "snapshot_load_failed", ctx);
+            lifecycleService.enterResyncing(state, OrderBookReason.SNAPSHOT_LOAD_FAILED, ctx);
             return;
         }
 
@@ -93,13 +95,14 @@ public class DepthDiffBootstrapService {
                 && syncPolicy.isSnapshotTooOld(snapshot.lastUpdateId(), firstBufferedUpdateId)) {
             log.warn("Snapshot too old: symbol={} snapshotLastUpdateId={} firstBufferedUpdateId={}",
                     state.getSymbol(), snapshot.lastUpdateId(), firstBufferedUpdateId);
-            lifecycleService.enterResyncing(state, "snapshot_too_old", ctx);
+            lifecycleService.enterResyncing(state, OrderBookReason.SNAPSHOT_TOO_OLD, ctx);
             return;
         }
 
         state.setStatus(SymbolStateStatus.APPLYING_BUFFER);
         orderBookApplier.applySnapshot(state.getOrderBook(), snapshot);
         state.setLocalUpdateId(snapshot.lastUpdateId());
+        state.setPreviousLocalUpdateId(null);
         state.setLastSnapshotUpdateId(snapshot.lastUpdateId());
 
         int bufferBefore = state.getBufferedEvents().size();
@@ -118,7 +121,7 @@ public class DepthDiffBootstrapService {
         if (!syncPolicy.isBridgingEvent(firstRemainingEvent, snapshot.lastUpdateId())) {
             log.warn("No bridging event: symbol={} firstU={} u={} snapshotLastUpdateId={}",
                     state.getSymbol(), firstRemainingEvent.firstUpdateId(), firstRemainingEvent.finalUpdateId(), snapshot.lastUpdateId());
-            lifecycleService.enterResyncing(state, "no_bridging_event", ctx);
+            lifecycleService.enterResyncing(state, OrderBookReason.NO_BRIDGING_EVENT, ctx);
             return;
         }
 
@@ -134,11 +137,11 @@ public class DepthDiffBootstrapService {
         if (book.isCrossed()) {
             log.warn("CROSSED_BOOK after bootstrap: symbol={} bestBid={} bestAsk={} snapshotLastUpdateId={} — entering resync instead of going LIVE",
                     state.getSymbol(), book.bestBid(), book.bestAsk(), state.getLastSnapshotUpdateId());
-            lifecycleService.enterResyncing(state, "crossed_book_after_bootstrap", ctx);
+            lifecycleService.enterResyncing(state, OrderBookReason.CROSSED_BOOK, ctx);
             return;
         }
         lifecycleService.enterLiveFromSnapshot(state, ctx, setOffsetFromCurrentContext);
-        marketStatePublisher.publishProjectedStateIfLive(state);
+        marketStatePublisher.publishSnapshotIfLive(state, null, null);
     }
 
     public void discardStaleBufferedEvents(SymbolState state, long snapshotLastUpdateId) {
@@ -156,14 +159,18 @@ public class DepthDiffBootstrapService {
             SyncDecision decision = syncPolicy.evaluate(bufferedEvent, state);
 
             switch (decision) {
-                case IGNORE -> log.info("BUFFER_REPLAY_IGNORE: symbol={} localUpdateId={} U={} u={}",
-                        state.getSymbol(), state.getLocalUpdateId(),
-                        bufferedEvent.firstUpdateId(), bufferedEvent.finalUpdateId());
+                case IGNORE -> {
+                    state.incrementDuplicateCount();
+                    log.info("BUFFER_REPLAY_IGNORE: symbol={} localUpdateId={} U={} u={}",
+                            state.getSymbol(), state.getLocalUpdateId(),
+                            bufferedEvent.firstUpdateId(), bufferedEvent.finalUpdateId());
+                }
                 case RESYNC -> {
                     log.warn("BUFFER_REPLAY_RESYNC: symbol={} localUpdateId={} U={} u={}",
                             state.getSymbol(), state.getLocalUpdateId(),
                             bufferedEvent.firstUpdateId(), bufferedEvent.finalUpdateId());
-                    lifecycleService.enterResyncing(state, "gap_during_buffer_replay", bufferedCtx);
+                    state.incrementGapCount();
+                    lifecycleService.enterResyncing(state, OrderBookReason.GAP_DURING_BUFFER_REPLAY, bufferedCtx);
                     return false;
                 }
                 case APPLY -> applyDepthDiffToState(state, bufferedEvent, bufferedCtx);
@@ -174,11 +181,12 @@ public class DepthDiffBootstrapService {
 
     private void applyDepthDiffToState(SymbolState state, DepthDiffDto event, KafkaMessageContext ctx) {
         var metadata = event.metadataDto();
+        state.setPreviousLocalUpdateId(state.getLocalUpdateId());
         orderBookApplier.applyDiff(state.getOrderBook(), event);
         state.setLocalUpdateId(event.finalUpdateId());
-        state.setLastProcessedOffset(ctx.offset());
         state.setLastEventExchangeTs(metadata.exchangeTs());
         state.setLastEventReceivedTs(metadata.receivedTs());
         state.setLastEventProcessedTs(metadata.processedTs());
+        state.recordInputContext(event, ctx);
     }
 }

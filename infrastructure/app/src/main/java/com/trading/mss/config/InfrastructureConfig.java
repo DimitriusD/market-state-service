@@ -7,13 +7,13 @@ import com.trading.mss.api.BinanceResilienceConfig;
 import com.trading.mss.api.BinanceSpotSnapshotApiServiceImpl;
 import com.trading.mss.api.ExecutorSnapshotFetcher;
 import com.trading.mss.api.ResilientBinanceSnapshotApiService;
-import com.trading.mss.mapper.BboStateMapper;
-import com.trading.mss.mapper.OrderBookDepthStateMapper;
+import com.trading.mss.mapper.OrderBookL2SnapshotMapper;
+import com.trading.mss.mapper.OrderBookStatusMapper;
 import com.trading.mss.port.input.ProcessDepthDiffUseCase;
 import com.trading.mss.port.output.AsyncSnapshotPort;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
-import com.trading.mss.port.output.PublishBboStatePort;
-import com.trading.mss.port.output.PublishOrderBookDepthStatePort;
+import com.trading.mss.port.output.PublishOrderBookL2SnapshotPort;
+import com.trading.mss.port.output.PublishOrderBookStatusPort;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import com.trading.mss.service.*;
 import com.trading.mss.service.handler.*;
@@ -64,13 +64,13 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public BboStateMapper bboStateMapper() {
-        return new BboStateMapper();
+    public OrderBookL2SnapshotMapper orderBookL2SnapshotMapper(Clock clock) {
+        return new OrderBookL2SnapshotMapper(clock);
     }
 
     @Bean
-    public OrderBookDepthStateMapper orderBookDepthStateMapper() {
-        return new OrderBookDepthStateMapper();
+    public OrderBookStatusMapper orderBookStatusMapper(Clock clock) {
+        return new OrderBookStatusMapper(clock);
     }
 
     @Bean
@@ -138,23 +138,25 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public SymbolStateLifecycleService symbolStateLifecycleService(SymbolStateStorePort symbolStateStore) {
-        return new SymbolStateLifecycleService(symbolStateStore);
+    public SymbolStateLifecycleService symbolStateLifecycleService(
+            SymbolStateStorePort symbolStateStore,
+            OrderBookStatusMapper orderBookStatusMapper,
+            PublishOrderBookStatusPort publishOrderBookStatusPort) {
+        return new SymbolStateLifecycleService(
+                symbolStateStore, orderBookStatusMapper, publishOrderBookStatusPort);
     }
 
     @Bean
     public MarketStatePublisher marketStatePublisher(
-            BboStateMapper bboStateMapper,
-            OrderBookDepthStateMapper orderBookDepthStateMapper,
-            PublishBboStatePort publishBboStatePort,
-            PublishOrderBookDepthStatePort publishOrderBookDepthStatePort,
-            @Value("${app.market-state.publish.topn-depth:10}") int publishedLevels) {
+            OrderBookL2SnapshotMapper orderBookL2SnapshotMapper,
+            PublishOrderBookL2SnapshotPort publishOrderBookL2SnapshotPort,
+            @Value("${app.market-state.publish.topn-depth:10}") int publishedDepth,
+            @Value("${app.binance.snapshot.depth-limit:1000}") int snapshotDepthLimit) {
         return new MarketStatePublisher(
-                bboStateMapper,
-                orderBookDepthStateMapper,
-                publishBboStatePort,
-                publishOrderBookDepthStatePort,
-                publishedLevels);
+                orderBookL2SnapshotMapper,
+                publishOrderBookL2SnapshotPort,
+                publishedDepth,
+                snapshotDepthLimit);
     }
 
     @Bean

@@ -18,7 +18,11 @@ public class DepthDiffConsumer {
             containerFactory = "depthDiffListenerContainerFactory"
     )
     public void consume(ConsumerRecord<String, DepthDiffEvent> depthDiffEvent) {
-        var context = new KafkaMessageContext(depthDiffEvent.key(), depthDiffEvent.partition(), depthDiffEvent.offset());
+        var context = new KafkaMessageContext(
+                depthDiffEvent.topic(),
+                depthDiffEvent.key(),
+                depthDiffEvent.partition(),
+                depthDiffEvent.offset());
         var dto = DepthDiffAvroMapper.toDto(depthDiffEvent.value());
         processDepthDiff.process(dto, context);
     }

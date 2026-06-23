@@ -1,22 +1,23 @@
 package com.trading.mss.service;
 
 import com.trading.common.enums.BookSyncStatus;
+import com.trading.mss.domain.model.BufferedDepthDiff;
+import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.ScaledDecimal;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
-import com.trading.mss.domain.model.BufferedDepthDiff;
-import com.trading.mss.mapper.BboStateMapper;
-import com.trading.mss.mapper.OrderBookDepthStateMapper;
-import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.KafkaMessageContext;
 import com.trading.mss.dto.common.MetadataDto;
 import com.trading.mss.dto.common.PriceLevelDto;
-import com.trading.mss.dto.orderbook.BboStateDto;
-import com.trading.mss.dto.orderbook.OrderBookDepthStateDto;
+import com.trading.mss.dto.market.DepthDiffDto;
+import com.trading.mss.dto.orderbook.OrderBookL2SnapshotDto;
+import com.trading.mss.dto.orderbook.OrderBookStatusDto;
+import com.trading.mss.mapper.OrderBookL2SnapshotMapper;
+import com.trading.mss.mapper.OrderBookStatusMapper;
 import com.trading.mss.port.output.AsyncSnapshotPort;
-import com.trading.mss.port.output.PublishBboStatePort;
-import com.trading.mss.port.output.PublishOrderBookDepthStatePort;
+import com.trading.mss.port.output.PublishOrderBookL2SnapshotPort;
+import com.trading.mss.port.output.PublishOrderBookStatusPort;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import com.trading.mss.service.handler.BootstrapPhaseStateHandler;
 import com.trading.mss.service.handler.BufferingDiffsStateHandler;
@@ -47,10 +48,12 @@ class ProcessDepthDiffServiceTest {
     private static final int PUBLISHED_LEVELS = 10;
     private static final long BOOTSTRAP_COOLDOWN_MS = 5000;
 
+    private static final String INPUT_TOPIC = "canonical.market.depthdiff.v1";
+
     private StubSymbolStateStore stateStore;
     private StubAsyncSnapshotPort snapshotPort;
-    private RecordingBboPublisher bboPublisher;
-    private RecordingTopNPublisher topNPublisher;
+    private RecordingSnapshotPublisher snapshotPublisher;
+    private RecordingStatusPublisher statusPublisher;
     private MutableClock clock;
     private ProcessDepthDiffService service;
 
@@ -58,8 +61,8 @@ class ProcessDepthDiffServiceTest {
     void setUp() {
         stateStore = new StubSymbolStateStore();
         snapshotPort = new StubAsyncSnapshotPort();
-        bboPublisher = new RecordingBboPublisher();
-        topNPublisher = new RecordingTopNPublisher();
+        snapshotPublisher = new RecordingSnapshotPublisher();
+        statusPublisher = new RecordingStatusPublisher();
         clock = new MutableClock(1_700_000_000_000L);
         service = createService(MAX_BUFFERED_EVENTS);
     }
@@ -67,13 +70,13 @@ class ProcessDepthDiffServiceTest {
     private ProcessDepthDiffService createService(int maxBufferedEvents) {
         OrderBookApplier orderBookApplier = new OrderBookApplier();
         BinanceSpotSyncPolicy syncPolicy = new BinanceSpotSyncPolicy();
-        SymbolStateLifecycleService lifecycleService = new SymbolStateLifecycleService(stateStore);
+        SymbolStateLifecycleService lifecycleService = new SymbolStateLifecycleService(
+                stateStore, new OrderBookStatusMapper(clock), statusPublisher);
         MarketStatePublisher marketStatePublisher = new MarketStatePublisher(
-                new BboStateMapper(),
-                new OrderBookDepthStateMapper(),
-                bboPublisher,
-                topNPublisher,
-                PUBLISHED_LEVELS
+                new OrderBookL2SnapshotMapper(clock),
+                snapshotPublisher,
+                PUBLISHED_LEVELS,
+                SNAPSHOT_DEPTH_LIMIT
         );
         LiveOrderBookUpdateService liveOrderBookUpdateService = new LiveOrderBookUpdateService(
                 orderBookApplier,
@@ -143,6 +146,7 @@ class ProcessDepthDiffServiceTest {
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
             assertFalse(state.isTrusted());
+            assertLastStatusReason(OrderBookReason.SNAPSHOT_TOO_OLD);
         }
 
         @Test
@@ -165,6 +169,7 @@ class ProcessDepthDiffServiceTest {
 
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
+            assertLastStatusReason(OrderBookReason.SNAPSHOT_LOAD_FAILED);
         }
 
         @Test
@@ -193,6 +198,7 @@ class ProcessDepthDiffServiceTest {
             SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(SymbolStateStatus.RESYNCING, after.getStatus());
             assertFalse(after.isTrusted());
+            assertLastStatusReason(OrderBookReason.NO_BRIDGING_EVENT);
         }
 
         @Test
@@ -210,6 +216,7 @@ class ProcessDepthDiffServiceTest {
 
             SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(SymbolStateStatus.RESYNCING, after.getStatus());
+            assertLastStatusReason(OrderBookReason.GAP_DURING_BUFFER_REPLAY);
         }
 
         @Test
@@ -262,6 +269,7 @@ class ProcessDepthDiffServiceTest {
             SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(SymbolStateStatus.RESYNCING, after.getStatus());
             assertFalse(after.isTrusted());
+            assertLastStatusReason(OrderBookReason.BUFFER_OVERFLOW);
         }
     }
 
@@ -291,7 +299,7 @@ class ProcessDepthDiffServiceTest {
         }
 
         @Test
-        void ignore_doesNotMutateBook() {
+        void ignore_doesNotMutateBook_andCountsDuplicate() {
             int bidsBefore = stateStore.loadOrCreate("BTCUSDT", "binance").getOrderBook().getBids().size();
 
             service.process(
@@ -303,6 +311,7 @@ class ProcessDepthDiffServiceTest {
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(105, state.getLocalUpdateId());
             assertEquals(bidsBefore, state.getOrderBook().getBids().size());
+            assertEquals(1, state.getDuplicateCount());
         }
 
         @Test
@@ -315,9 +324,26 @@ class ProcessDepthDiffServiceTest {
         }
 
         @Test
-        void crossedBookAfterApply_goesResyncingWithoutPublishing() {
-            bboPublisher.published.clear();
-            topNPublisher.published.clear();
+        void gap_publishesStatusAndIncrementsCounters_withoutSnapshot() {
+            snapshotPublisher.published.clear();
+            statusPublisher.published.clear();
+
+            service.process(event(200, 210, List.of(), List.of()), ctx(2));
+
+            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            assertTrue(snapshotPublisher.published.isEmpty(), "gap must not publish a snapshot");
+            assertLastStatusReason(OrderBookReason.GAP_DETECTED);
+            assertEquals(SymbolStateStatus.RESYNCING, lastStatus().lifecycleStatus());
+            assertEquals(BookSyncStatus.OUT_OF_SYNC, lastStatus().syncStatus());
+            assertFalse(lastStatus().trusted());
+            assertEquals(1, state.getGapCount());
+            assertEquals(1, state.getResyncCount());
+        }
+
+        @Test
+        void crossedBookAfterApply_goesResyncingWithoutPublishingSnapshot() {
+            snapshotPublisher.published.clear();
+            statusPublisher.published.clear();
 
             service.process(
                     event(106, 110,
@@ -328,8 +354,11 @@ class ProcessDepthDiffServiceTest {
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
             assertFalse(state.isTrusted());
-            assertTrue(bboPublisher.published.isEmpty(), "crossed book must not publish BBO");
-            assertTrue(topNPublisher.published.isEmpty(), "crossed book must not publish depth");
+            assertTrue(snapshotPublisher.published.isEmpty(), "crossed book must not publish a snapshot");
+            assertLastStatusReason(OrderBookReason.CROSSED_BOOK);
+            assertEquals(SymbolStateStatus.RESYNCING, lastStatus().lifecycleStatus());
+            assertEquals(BookSyncStatus.OUT_OF_SYNC, lastStatus().syncStatus());
+            assertFalse(lastStatus().trusted());
         }
 
         @Test
@@ -489,31 +518,38 @@ class ProcessDepthDiffServiceTest {
     class Publishing {
 
         @Test
-        void publishesAfterSuccessfulBootstrapToLive() {
+        void bootstrapSuccess_publishesOneSnapshotAndLiveStatus() {
             snapshotPort.setSnapshot(snapshot(100,
                     List.of(new PriceLevelDto("50000.00", "1.0")),
                     List.of(new PriceLevelDto("50001.00", "1.0"))));
 
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
-            assertEquals(1, bboPublisher.published.size());
-            assertEquals(1, topNPublisher.published.size());
+            assertEquals(1, snapshotPublisher.published.size());
+            OrderBookL2SnapshotDto snap = snapshotPublisher.published.getFirst();
+            assertEquals("50000.00000000", snap.bbo().bestBid().price());
+            assertEquals("50001.00000000", snap.bbo().bestAsk().price());
+            assertEquals(BookSyncStatus.IN_SYNC, snap.quality().syncStatus());
+            assertTrue(snap.quality().trusted());
+            assertEquals(OrderBookReason.NONE, snap.quality().reason());
+            assertEquals(100, snap.version().lastSnapshotUpdateId());
+            assertEquals(105, snap.version().exchangeUpdateId());
 
-            BboStateDto bbo = bboPublisher.published.getFirst();
-            assertEquals("50000.00000000", bbo.bestBid().price());
-            assertEquals("50001.00000000", bbo.bestAsk().price());
-            assertEquals(BookSyncStatus.IN_SYNC, bbo.syncStatus());
+            OrderBookStatusDto live = lastStatus();
+            assertEquals(SymbolStateStatus.LIVE, live.lifecycleStatus());
+            assertEquals(BookSyncStatus.IN_SYNC, live.syncStatus());
+            assertTrue(live.trusted());
+            assertEquals(OrderBookReason.NONE, live.reason());
         }
 
         @Test
-        void publishesAfterLiveApply() {
+        void publishesExactlyOneSnapshotAfterLiveApply() {
             snapshotPort.setSnapshot(snapshot(100,
                     List.of(new PriceLevelDto("50000.00", "1.0")),
                     List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
-            bboPublisher.published.clear();
-            topNPublisher.published.clear();
+            snapshotPublisher.published.clear();
 
             service.process(
                     event(106, 110,
@@ -521,12 +557,32 @@ class ProcessDepthDiffServiceTest {
                             List.of()),
                     ctx(2));
 
-            assertEquals(1, bboPublisher.published.size());
-            assertEquals(1, topNPublisher.published.size());
+            assertEquals(1, snapshotPublisher.published.size());
+            OrderBookL2SnapshotDto snap = snapshotPublisher.published.getFirst();
+            assertEquals(110, snap.version().exchangeUpdateId());
+            assertEquals(INPUT_TOPIC, snap.source().inputTopic());
+            assertEquals(2, snap.source().inputOffset());
+            assertEquals(106L, snap.source().inputFirstUpdateId());
+            assertEquals(110L, snap.source().inputFinalUpdateId());
         }
 
         @Test
-        void doesNotPublishDuringBuffering() {
+        void stateSeqIsMonotonicAcrossSnapshots() {
+            snapshotPort.setSnapshot(snapshot(100,
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
+            service.process(event(98, 105, List.of(), List.of()), ctx(1));
+            service.process(event(106, 110, List.of(new PriceLevelDto("49999.00", "2.0")), List.of()), ctx(2));
+            service.process(event(111, 115, List.of(new PriceLevelDto("49998.00", "2.0")), List.of()), ctx(3));
+
+            assertEquals(3, snapshotPublisher.published.size());
+            assertEquals(1, snapshotPublisher.published.get(0).version().stateSeq());
+            assertEquals(2, snapshotPublisher.published.get(1).version().stateSeq());
+            assertEquals(3, snapshotPublisher.published.get(2).version().stateSeq());
+        }
+
+        @Test
+        void doesNotPublishSnapshotDuringBuffering() {
             snapshotPort.setSnapshot(null);
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             state.setStatus(SymbolStateStatus.BUFFERING_DIFFS);
@@ -535,12 +591,11 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(100, 105, List.of(), List.of()), ctx(1));
 
-            assertTrue(bboPublisher.published.isEmpty());
-            assertTrue(topNPublisher.published.isEmpty());
+            assertTrue(snapshotPublisher.published.isEmpty());
         }
 
         @Test
-        void doesNotPublishDuringSnapshotLoading() {
+        void doesNotPublishSnapshotDuringSnapshotLoading() {
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
             state.setBootstrapInProgress(true);
@@ -548,12 +603,11 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(100, 105, List.of(), List.of()), ctx(1));
 
-            assertTrue(bboPublisher.published.isEmpty());
-            assertTrue(topNPublisher.published.isEmpty());
+            assertTrue(snapshotPublisher.published.isEmpty());
         }
 
         @Test
-        void doesNotPublishDuringApplyingBuffer() {
+        void doesNotPublishSnapshotDuringApplyingBuffer() {
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             state.setStatus(SymbolStateStatus.APPLYING_BUFFER);
             state.setBootstrapInProgress(true);
@@ -561,30 +615,27 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(100, 105, List.of(), List.of()), ctx(1));
 
-            assertTrue(bboPublisher.published.isEmpty());
-            assertTrue(topNPublisher.published.isEmpty());
+            assertTrue(snapshotPublisher.published.isEmpty());
         }
 
         @Test
-        void doesNotPublishDuringResyncing() {
+        void doesNotPublishSnapshotDuringResyncing() {
             snapshotPort.setSnapshot(snapshot(100,
                     List.of(new PriceLevelDto("50000.00", "1.0")),
                     List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
-            bboPublisher.published.clear();
-            topNPublisher.published.clear();
+            snapshotPublisher.published.clear();
 
             service.process(event(200, 210, List.of(), List.of()), ctx(2));
 
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
-            assertTrue(bboPublisher.published.isEmpty());
-            assertTrue(topNPublisher.published.isEmpty());
+            assertTrue(snapshotPublisher.published.isEmpty());
         }
 
         @Test
-        void doesNotPublishBboWhenBookHasNoBidsOrAsks() {
+        void oneSidedBook_goesLiveButPublishesNoSnapshot() {
             snapshotPort.setSnapshot(snapshot(200, List.of(), List.of()));
 
             service.process(event(90, 95, List.of(), List.of()), ctx(1));
@@ -592,29 +643,26 @@ class ProcessDepthDiffServiceTest {
             SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
             assertEquals(SymbolStateStatus.LIVE, state.getStatus());
             assertTrue(state.isTrusted());
-
-            assertTrue(bboPublisher.published.isEmpty());
-            assertEquals(1, topNPublisher.published.size());
+            assertTrue(snapshotPublisher.published.isEmpty(),
+                    "incomplete (one-sided) book must not be published as a trusted snapshot");
         }
 
         @Test
-        void topNEventContainsCorrectDepthAndLevels() {
+        void snapshotDepthContainsSortedLevels() {
             snapshotPort.setSnapshot(snapshot(100,
                     List.of(new PriceLevelDto("50000.00", "1.0"), new PriceLevelDto("49999.00", "2.0")),
                     List.of(new PriceLevelDto("50001.00", "1.0"), new PriceLevelDto("50002.00", "3.0"))));
 
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
-            assertEquals(1, topNPublisher.published.size());
-            OrderBookDepthStateDto depthState = topNPublisher.published.getFirst();
-            assertEquals(PUBLISHED_LEVELS, depthState.publishedLevels());
-            assertEquals(2, depthState.bidLevels().size());
-            assertEquals(2, depthState.askLevels().size());
-            assertEquals("50000.00000000", depthState.bidLevels().get(0).price());
-            assertEquals("49999.00000000", depthState.bidLevels().get(1).price());
-            assertEquals("50001.00000000", depthState.askLevels().get(0).price());
-            assertEquals("50002.00000000", depthState.askLevels().get(1).price());
-            assertEquals(BookSyncStatus.IN_SYNC, depthState.syncStatus());
+            assertEquals(1, snapshotPublisher.published.size());
+            OrderBookL2SnapshotDto snap = snapshotPublisher.published.getFirst();
+            assertEquals(2, snap.depth().bids().size());
+            assertEquals(2, snap.depth().asks().size());
+            assertEquals("50000.00000000", snap.depth().bids().get(0).price());
+            assertEquals("49999.00000000", snap.depth().bids().get(1).price());
+            assertEquals("50001.00000000", snap.depth().asks().get(0).price());
+            assertEquals("50002.00000000", snap.depth().asks().get(1).price());
         }
 
         @Test
@@ -626,8 +674,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(200, 210, List.of(), List.of()), ctx(2));
 
-            bboPublisher.published.clear();
-            topNPublisher.published.clear();
+            snapshotPublisher.published.clear();
 
             snapshotPort.setSnapshot(snapshot(300,
                     List.of(new PriceLevelDto("51000.00", "1.0")),
@@ -635,26 +682,35 @@ class ProcessDepthDiffServiceTest {
             clock.advance(BOOTSTRAP_COOLDOWN_MS + 1);
             service.process(event(298, 310, List.of(), List.of()), ctx(3));
 
-            assertFalse(bboPublisher.published.isEmpty());
-            assertFalse(topNPublisher.published.isEmpty());
-            assertEquals("51000.00000000", bboPublisher.published.getFirst().bestBid().price());
+            assertFalse(snapshotPublisher.published.isEmpty());
+            assertEquals("51000.00000000", snapshotPublisher.published.getFirst().bbo().bestBid().price());
         }
 
         @Test
-        void bboMetadataContainsSymbolAndVenue() {
+        void snapshotMetadataContainsSymbolAndVenue() {
             snapshotPort.setSnapshot(snapshot(100,
                     List.of(new PriceLevelDto("50000.00", "1.0")),
                     List.of(new PriceLevelDto("50001.00", "1.0"))));
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
-            BboStateDto bbo = bboPublisher.published.getFirst();
-            assertEquals("BTCUSDT", bbo.metadata().symbol());
-            assertEquals("binance", bbo.metadata().exchange());
-            assertEquals("spot", bbo.metadata().marketType());
-            assertEquals("BTCUSDT", bbo.metadata().instrumentId());
-            assertEquals("BTC", bbo.metadata().base());
-            assertEquals("USDT", bbo.metadata().quote());
+            OrderBookL2SnapshotDto snap = snapshotPublisher.published.getFirst();
+            assertEquals("BTCUSDT", snap.metadata().symbol());
+            assertEquals("binance", snap.metadata().exchange());
+            assertEquals("spot", snap.metadata().marketType());
+            assertEquals("BTCUSDT", snap.metadata().instrumentId());
+            assertEquals("BTC", snap.metadata().base());
+            assertEquals("USDT", snap.metadata().quote());
+            assertEquals("ORDERBOOK_L2_SNAPSHOT", snap.metadata().eventType());
         }
+    }
+
+    private OrderBookStatusDto lastStatus() {
+        assertFalse(statusPublisher.published.isEmpty(), "expected at least one status event");
+        return statusPublisher.published.getLast();
+    }
+
+    private void assertLastStatusReason(OrderBookReason expected) {
+        assertEquals(expected, lastStatus().reason());
     }
 
     private static DepthDiffDto event(long firstUpdateId, long finalUpdateId,
@@ -674,7 +730,7 @@ class ProcessDepthDiffServiceTest {
     }
 
     private static KafkaMessageContext ctx(long offset) {
-        return new KafkaMessageContext("BTCUSDT", 0, offset);
+        return new KafkaMessageContext(INPUT_TOPIC, "BTCUSDT", 0, offset);
     }
 
     static final class MutableClock extends Clock {
@@ -774,21 +830,21 @@ class ProcessDepthDiffServiceTest {
         }
     }
 
-    static class RecordingBboPublisher implements PublishBboStatePort {
-        final List<BboStateDto> published = new ArrayList<>();
+    static class RecordingSnapshotPublisher implements PublishOrderBookL2SnapshotPort {
+        final List<OrderBookL2SnapshotDto> published = new ArrayList<>();
 
         @Override
-        public void publish(BboStateDto event) {
-            published.add(event);
+        public void publish(OrderBookL2SnapshotDto snapshot) {
+            published.add(snapshot);
         }
     }
 
-    static class RecordingTopNPublisher implements PublishOrderBookDepthStatePort {
-        final List<OrderBookDepthStateDto> published = new ArrayList<>();
+    static class RecordingStatusPublisher implements PublishOrderBookStatusPort {
+        final List<OrderBookStatusDto> published = new ArrayList<>();
 
         @Override
-        public void publish(OrderBookDepthStateDto event) {
-            published.add(event);
+        public void publish(OrderBookStatusDto status) {
+            published.add(status);
         }
     }
 }

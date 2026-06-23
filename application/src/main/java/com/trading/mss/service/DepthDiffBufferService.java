@@ -1,6 +1,7 @@
 package com.trading.mss.service;
 
 import com.trading.mss.domain.model.BufferedDepthDiff;
+import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.KafkaMessageContext;
@@ -19,7 +20,7 @@ public class DepthDiffBufferService {
             log.warn("BUFFER_OVERFLOW: symbol={} maxBufferedEvents={} status={} bootstrapInProgress={} partition={} offset={} key={}",
                     state.getSymbol(), maxBufferedEvents, state.getStatus(), state.isBootstrapInProgress(),
                     ctx.partition(), ctx.offset(), ctx.key());
-            lifecycleService.enterResyncing(state, "buffer_overflow", ctx);
+            lifecycleService.enterResyncing(state, OrderBookReason.BUFFER_OVERFLOW, ctx);
             return false;
         }
 

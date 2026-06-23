@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this service is
 
-Market State Service consumes canonical **depth-diff** events from Kafka, reconstructs a per-symbol L2 order book using a Binance Spot **snapshot + diff** bootstrap, and publishes **trusted** market state (top-N order book depth and BBO) for downstream consumers. It does not connect to exchanges, normalize raw feeds, or make trading decisions.
+Market State Service consumes canonical **depth-diff** events from Kafka, reconstructs a per-symbol L2 order book using a Binance Spot **snapshot + diff** bootstrap, and publishes **trusted** market state for downstream consumers. BBO and top-N depth are published together, atomically, inside a single authoritative snapshot event (they are projections of the same reconstructed book version). A separate status event reports lifecycle/quality transitions (resync, crossed book, gaps, …). The service does not connect to exchanges, normalize raw feeds, or make trading decisions.
 
 - Input topic: `canonical.market.depthdiff.v1`
-- Output topics: `state.orderbook.l2.topn.v1`, `state.bbo.v1`
+- Output topics: `market.state.orderbook.l2.snapshot.v1` (authoritative `OrderBookL2SnapshotEvent` — metadata + version + quality + bbo + depth + source), `market.state.orderbook.status.v1` (`OrderBookStatusEvent` — lifecycle/sync status + reason). Both are keyed by `metadata.instrumentId`. A crossed/out-of-sync book is **never** published as a snapshot; it is reported via a status event instead.
 
 `market-state-service-technical-design.md` is the authoritative spec for the domain (state machine, bootstrap/live sequencing rules, invariants, output contracts). **`README.md` is the upstream hexagonal-template README and does NOT describe this service** (it talks about an `Item` domain, REST API, Postgres/Flyway — none of which exist here). Trust the design doc and the code, not the README.
 

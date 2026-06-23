@@ -18,8 +18,8 @@ app:
     topic:
       depth-diff: ${APP_KAFKA_TOPIC_DEPTH_DIFF:canonical.market.depthdiff.v1}
     topics:
-      bbo-state: ${APP_KAFKA_TOPICS_BBO_STATE:state.bbo.v1}
-      orderbook-topn-state: ${APP_KAFKA_TOPICS_ORDERBOOK_TOPN_STATE:state.orderbook.l2.topn.v1}
+      orderbook-l2-snapshot: ${APP_KAFKA_TOPICS_ORDERBOOK_L2_SNAPSHOT:market.state.orderbook.l2.snapshot.v1}
+      orderbook-status: ${APP_KAFKA_TOPICS_ORDERBOOK_STATUS:market.state.orderbook.status.v1}
   binance:
     rest:
       base-url: ${APP_BINANCE_REST_BASE_URL:https://api.binance.com}
