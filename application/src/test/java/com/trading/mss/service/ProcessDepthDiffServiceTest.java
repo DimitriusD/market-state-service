@@ -5,6 +5,7 @@ import com.trading.mss.domain.model.BufferedDepthDiff;
 import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.ScaledDecimal;
+import com.trading.mss.domain.model.SymbolKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.KafkaMessageContext;
@@ -49,13 +50,14 @@ class ProcessDepthDiffServiceTest {
     private static final long BOOTSTRAP_COOLDOWN_MS = 5000;
 
     private static final String INPUT_TOPIC = "canonical.market.depthdiff.v1";
+    private static final SymbolKey KEY = new SymbolKey("binance", "spot", "BTCUSDT");
 
     private StubSymbolStateStore stateStore;
     private StubAsyncSnapshotPort snapshotPort;
     private RecordingSnapshotPublisher snapshotPublisher;
     private RecordingStatusPublisher statusPublisher;
     private MutableClock clock;
-    private ProcessDepthDiffService service;
+    private DepthDiffService service;
 
     @BeforeEach
     void setUp() {
@@ -67,7 +69,7 @@ class ProcessDepthDiffServiceTest {
         service = createService(MAX_BUFFERED_EVENTS);
     }
 
-    private ProcessDepthDiffService createService(int maxBufferedEvents) {
+    private DepthDiffService createService(int maxBufferedEvents) {
         OrderBookApplier orderBookApplier = new OrderBookApplier();
         BinanceSpotSyncPolicy syncPolicy = new BinanceSpotSyncPolicy();
         SymbolStateLifecycleService lifecycleService = new SymbolStateLifecycleService(
@@ -110,7 +112,7 @@ class ProcessDepthDiffServiceTest {
         ));
         registry.registerAdditionalStatus(SymbolStateStatus.APPLYING_BUFFER, bootstrapPhaseHandler);
 
-        return new ProcessDepthDiffService(stateStore, registry);
+        return new DepthDiffService(stateStore, registry);
     }
 
     @Nested
@@ -128,7 +130,7 @@ class ProcessDepthDiffServiceTest {
                             List.of(new PriceLevelDto("50002.00", "0.5"))),
                     ctx(1));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.LIVE, state.getStatus());
             assertTrue(state.isTrusted());
             assertEquals(105, state.getLocalUpdateId());
@@ -143,7 +145,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(100, 110, List.of(), List.of()), ctx(1));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
             assertFalse(state.isTrusted());
             assertLastStatusReason(OrderBookReason.SNAPSHOT_TOO_OLD);
@@ -155,7 +157,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(90, 95, List.of(), List.of()), ctx(1));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.LIVE, state.getStatus());
             assertTrue(state.isTrusted());
             assertEquals(200, state.getLocalUpdateId());
@@ -167,7 +169,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(100, 110, List.of(), List.of()), ctx(1));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
             assertLastStatusReason(OrderBookReason.SNAPSHOT_LOAD_FAILED);
         }
@@ -178,13 +180,13 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertNull(state.getFirstBufferedUpdateId());
         }
 
         @Test
         void noBridgingEvent_goesResyncing() {
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.BUFFERING_DIFFS);
             state.bufferEvent(new BufferedDepthDiff(event(100, 100, List.of(), List.of()), ctx(90)));
             state.bufferEvent(new BufferedDepthDiff(event(107, 110, List.of(), List.of()), ctx(91)));
@@ -195,7 +197,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(108, 111, List.of(), List.of()), ctx(1));
 
-            SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, after.getStatus());
             assertFalse(after.isTrusted());
             assertLastStatusReason(OrderBookReason.NO_BRIDGING_EVENT);
@@ -203,7 +205,7 @@ class ProcessDepthDiffServiceTest {
 
         @Test
         void gapDuringReplay_goesResyncing() {
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.BUFFERING_DIFFS);
             state.bufferEvent(new BufferedDepthDiff(event(100, 101, List.of(), List.of()), ctx(100)));
             state.bufferEvent(new BufferedDepthDiff(event(103, 105, List.of(), List.of()), ctx(101)));
@@ -214,21 +216,21 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(104, 106, List.of(), List.of()), ctx(1));
 
-            SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, after.getStatus());
             assertLastStatusReason(OrderBookReason.GAP_DURING_BUFFER_REPLAY);
         }
 
         @Test
         void bootstrapAlreadyInProgress_buffersOnlyWithoutRestart() {
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
             state.setBootstrapInProgress(true);
             stateStore.save(state);
 
             service.process(event(120, 125, List.of(), List.of()), ctx(1));
 
-            SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.SNAPSHOT_LOADING, after.getStatus());
             assertTrue(after.isBootstrapInProgress());
             assertEquals(1, after.getBufferedEvents().size());
@@ -237,7 +239,7 @@ class ProcessDepthDiffServiceTest {
 
         @Test
         void replayUsesBufferedEventContext_forLastProcessedOffset() {
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.BUFFERING_DIFFS);
             state.bufferEvent(new BufferedDepthDiff(event(101, 103, List.of(), List.of()), ctx(10)));
             state.bufferEvent(new BufferedDepthDiff(event(104, 105, List.of(), List.of()), ctx(11)));
@@ -248,7 +250,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(90, 95, List.of(), List.of()), ctx(50));
 
-            SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.LIVE, after.getStatus());
             assertEquals(11, after.getLastProcessedOffset());
         }
@@ -257,7 +259,7 @@ class ProcessDepthDiffServiceTest {
         void bufferOverflow_entersResyncing() {
             service = createService(1);
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
             state.setBootstrapInProgress(true);
             state.bufferEvent(new BufferedDepthDiff(event(100, 101, List.of(), List.of()), ctx(1)));
@@ -266,7 +268,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(102, 103, List.of(), List.of()), ctx(2));
 
-            SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, after.getStatus());
             assertFalse(after.isTrusted());
             assertLastStatusReason(OrderBookReason.BUFFER_OVERFLOW);
@@ -292,7 +294,7 @@ class ProcessDepthDiffServiceTest {
                             List.of()),
                     ctx(2));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(110, state.getLocalUpdateId());
             assertEquals(SymbolStateStatus.LIVE, state.getStatus());
             assertTrue(state.getOrderBook().getBids().containsKey(ScaledDecimal.parse("49999.00")));
@@ -300,7 +302,7 @@ class ProcessDepthDiffServiceTest {
 
         @Test
         void ignore_doesNotMutateBook_andCountsDuplicate() {
-            int bidsBefore = stateStore.loadOrCreate("BTCUSDT", "binance").getOrderBook().getBids().size();
+            int bidsBefore = stateStore.loadOrCreate(KEY).getOrderBook().getBids().size();
 
             service.process(
                     event(90, 100,
@@ -308,7 +310,7 @@ class ProcessDepthDiffServiceTest {
                             List.of()),
                     ctx(2));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(105, state.getLocalUpdateId());
             assertEquals(bidsBefore, state.getOrderBook().getBids().size());
             assertEquals(1, state.getDuplicateCount());
@@ -318,7 +320,7 @@ class ProcessDepthDiffServiceTest {
         void gap_goesResyncing() {
             service.process(event(200, 210, List.of(), List.of()), ctx(2));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
             assertFalse(state.isTrusted());
         }
@@ -330,7 +332,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(200, 210, List.of(), List.of()), ctx(2));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertTrue(snapshotPublisher.published.isEmpty(), "gap must not publish a snapshot");
             assertLastStatusReason(OrderBookReason.GAP_DETECTED);
             assertEquals(SymbolStateStatus.RESYNCING, lastStatus().lifecycleStatus());
@@ -351,7 +353,7 @@ class ProcessDepthDiffServiceTest {
                             List.of()),
                     ctx(2));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
             assertFalse(state.isTrusted());
             assertTrue(snapshotPublisher.published.isEmpty(), "crossed book must not publish a snapshot");
@@ -369,7 +371,7 @@ class ProcessDepthDiffServiceTest {
                             List.of()),
                     ctx(2));
             assertEquals(SymbolStateStatus.RESYNCING,
-                    stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
+                    stateStore.loadOrCreate(KEY).getStatus());
 
             snapshotPort.setSnapshot(snapshot(300,
                     List.of(new PriceLevelDto("51000.00", "1.0")),
@@ -377,7 +379,7 @@ class ProcessDepthDiffServiceTest {
             clock.advance(BOOTSTRAP_COOLDOWN_MS + 1);
             service.process(event(298, 310, List.of(), List.of()), ctx(3));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.LIVE, state.getStatus());
             assertTrue(state.isTrusted());
             assertEquals(310, state.getLocalUpdateId());
@@ -396,7 +398,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(200, 210, List.of(), List.of()), ctx(2));
             assertEquals(SymbolStateStatus.RESYNCING,
-                    stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
+                    stateStore.loadOrCreate(KEY).getStatus());
 
             snapshotPort.setSnapshot(snapshot(300,
                     List.of(new PriceLevelDto("51000.00", "1.0")),
@@ -404,7 +406,7 @@ class ProcessDepthDiffServiceTest {
             clock.advance(BOOTSTRAP_COOLDOWN_MS + 1);
             service.process(event(298, 310, List.of(), List.of()), ctx(3));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.LIVE, state.getStatus());
             assertTrue(state.isTrusted());
             assertEquals(310, state.getLocalUpdateId());
@@ -420,7 +422,7 @@ class ProcessDepthDiffServiceTest {
             snapshotPort.setException(new RuntimeException("HTTP 429"));
 
             service.process(event(100, 110, List.of(), List.of()), ctx(1));
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
             int loadsAfterFirstAttempt = snapshotPort.getLoadCalls();
             assertTrue(loadsAfterFirstAttempt > 0);
@@ -431,7 +433,7 @@ class ProcessDepthDiffServiceTest {
 
             assertEquals(loadsAfterFirstAttempt, snapshotPort.getLoadCalls(),
                     "no new snapshot HTTP calls should happen during the cooldown");
-            SymbolState during = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState during = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.BUFFERING_DIFFS, during.getStatus());
             assertFalse(during.getBufferedEvents().isEmpty());
         }
@@ -461,7 +463,7 @@ class ProcessDepthDiffServiceTest {
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             assertEquals(SymbolStateStatus.LIVE,
-                    stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
+                    stateStore.loadOrCreate(KEY).getStatus());
         }
     }
 
@@ -476,20 +478,20 @@ class ProcessDepthDiffServiceTest {
                     List.of(new PriceLevelDto("50001.00", "1.0"))));
 
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.SNAPSHOT_LOADING, state.getStatus());
             assertTrue(state.isBootstrapInProgress());
             assertEquals(1, snapshotPort.getLoadCalls());
 
             service.process(event(106, 110, List.of(), List.of()), ctx(2));
             assertEquals(SymbolStateStatus.SNAPSHOT_LOADING,
-                    stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
+                    stateStore.loadOrCreate(KEY).getStatus());
             assertEquals(1, snapshotPort.getLoadCalls());
 
             snapshotPort.completePending();
             service.process(event(111, 115, List.of(), List.of()), ctx(3));
 
-            SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.LIVE, after.getStatus());
             assertTrue(after.isTrusted());
             assertEquals(115, after.getLocalUpdateId());
@@ -503,12 +505,12 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(100, 110, List.of(), List.of()), ctx(1));
             assertEquals(SymbolStateStatus.SNAPSHOT_LOADING,
-                    stateStore.loadOrCreate("BTCUSDT", "binance").getStatus());
+                    stateStore.loadOrCreate(KEY).getStatus());
 
             snapshotPort.completePending();
             service.process(event(111, 120, List.of(), List.of()), ctx(2));
 
-            SymbolState after = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, after.getStatus());
             assertFalse(after.isTrusted());
         }
@@ -584,7 +586,7 @@ class ProcessDepthDiffServiceTest {
         @Test
         void doesNotPublishSnapshotDuringBuffering() {
             snapshotPort.setSnapshot(null);
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.BUFFERING_DIFFS);
             state.setBootstrapInProgress(true);
             stateStore.save(state);
@@ -596,7 +598,7 @@ class ProcessDepthDiffServiceTest {
 
         @Test
         void doesNotPublishSnapshotDuringSnapshotLoading() {
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
             state.setBootstrapInProgress(true);
             stateStore.save(state);
@@ -608,7 +610,7 @@ class ProcessDepthDiffServiceTest {
 
         @Test
         void doesNotPublishSnapshotDuringApplyingBuffer() {
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.APPLYING_BUFFER);
             state.setBootstrapInProgress(true);
             stateStore.save(state);
@@ -629,7 +631,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(200, 210, List.of(), List.of()), ctx(2));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, state.getStatus());
             assertTrue(snapshotPublisher.published.isEmpty());
         }
@@ -640,7 +642,7 @@ class ProcessDepthDiffServiceTest {
 
             service.process(event(90, 95, List.of(), List.of()), ctx(1));
 
-            SymbolState state = stateStore.loadOrCreate("BTCUSDT", "binance");
+            SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.LIVE, state.getStatus());
             assertTrue(state.isTrusted());
             assertTrue(snapshotPublisher.published.isEmpty(),
@@ -769,13 +771,18 @@ class ProcessDepthDiffServiceTest {
         private final ConcurrentMap<String, SymbolState> states = new ConcurrentHashMap<>();
 
         @Override
-        public SymbolState loadOrCreate(String symbol, String venue) {
-            return states.computeIfAbsent(venue + ":" + symbol, k -> new SymbolState(symbol, venue));
+        public SymbolState loadOrCreate(SymbolKey key) {
+            return states.computeIfAbsent(key.canonical(), k -> new SymbolState(key));
         }
 
         @Override
         public void save(SymbolState state) {
-            states.put(state.getVenue() + ":" + state.getSymbol(), state);
+            states.put(state.key().canonical(), state);
+        }
+
+        @Override
+        public java.util.Collection<SymbolKey> keys() {
+            return states.values().stream().map(SymbolState::key).toList();
         }
     }
 

@@ -7,9 +7,10 @@ import com.trading.mss.api.BinanceResilienceConfig;
 import com.trading.mss.api.BinanceSpotSnapshotApiServiceImpl;
 import com.trading.mss.api.ExecutorSnapshotFetcher;
 import com.trading.mss.api.ResilientBinanceSnapshotApiService;
+import com.trading.mss.dispatch.StripedSerialExecutor;
 import com.trading.mss.mapper.OrderBookL2SnapshotMapper;
 import com.trading.mss.mapper.OrderBookStatusMapper;
-import com.trading.mss.port.input.ProcessDepthDiffUseCase;
+import com.trading.mss.port.input.DepthDiffProcessor;
 import com.trading.mss.port.output.AsyncSnapshotPort;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
 import com.trading.mss.port.output.PublishOrderBookL2SnapshotPort;
@@ -51,6 +52,19 @@ public class InfrastructureConfig {
     @Bean
     public SymbolStateStorePort symbolStateStore() {
         return new InMemorySymbolStateStore();
+    }
+
+    /**
+     * Serialization point for all symbol-state mutations. Registered as a bean so its
+     * SmartLifecycle stop (phase 0) runs AFTER the Kafka listener containers stop.
+     * stripes=1 is a deterministic global event loop; raise to 4-8 for 100+ active symbols
+     * (one slow symbol otherwise delays all others).
+     */
+    @Bean
+    public StripedSerialExecutor symbolExecutor(
+            @Value("${app.state.dispatcher.stripes:1}") int stripes,
+            @Value("${app.state.dispatcher.queue-capacity:10000}") int queueCapacity) {
+        return new StripedSerialExecutor(stripes, queueCapacity);
     }
 
     @Bean
@@ -227,9 +241,9 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public ProcessDepthDiffUseCase processDepthDiff(
+    public DepthDiffProcessor processDepthDiff(
             SymbolStateStorePort symbolStateStore,
             DepthDiffStateHandlerRegistry depthDiffStateHandlerRegistry) {
-        return new ProcessDepthDiffService(symbolStateStore, depthDiffStateHandlerRegistry);
+        return new DepthDiffService(symbolStateStore, depthDiffStateHandlerRegistry);
     }
 }

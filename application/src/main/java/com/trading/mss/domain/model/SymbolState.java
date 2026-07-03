@@ -19,9 +19,10 @@ public class SymbolState {
     private final OrderBook orderBook = new OrderBook();
     private final Deque<BufferedDepthDiff> bufferedEvents = new ArrayDeque<>();
 
+    private final String marketType;
+
     private SymbolStateStatus status = SymbolStateStatus.INIT;
     private boolean trusted = false;
-    private String marketType;
     private String base;
     private String quote;
     private String instrumentId;
@@ -56,9 +57,14 @@ public class SymbolState {
     private Long lastInputFinalUpdateId;
     private Long lastInputPreviousFinalUpdateId;
 
-    public SymbolState(String symbol, String venue) {
-        this.symbol = symbol;
-        this.venue = venue;
+    public SymbolState(SymbolKey key) {
+        this.symbol = key.symbol();
+        this.venue = key.exchange();
+        this.marketType = key.marketType();
+    }
+
+    public SymbolKey key() {
+        return new SymbolKey(venue, marketType, symbol);
     }
 
     public void bufferEvent(BufferedDepthDiff event) {

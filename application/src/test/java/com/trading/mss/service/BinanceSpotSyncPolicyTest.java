@@ -1,6 +1,7 @@
 package com.trading.mss.service;
 
 import com.trading.mss.domain.model.SyncDecision;
+import com.trading.mss.domain.model.SymbolKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.common.MetadataDto;
@@ -26,7 +27,7 @@ class BinanceSpotSyncPolicyTest {
 
         @Test
         void noAnchorYet_shouldApply() {
-            SymbolState state = new SymbolState("BTCUSDT", "binance");
+            SymbolState state = new SymbolState(new SymbolKey("binance", "spot", "BTCUSDT"));
             assertEquals(SyncDecision.APPLY, policy.evaluate(event(100, 105), state));
         }
 
@@ -144,7 +145,7 @@ class BinanceSpotSyncPolicyTest {
     }
 
     private SymbolState stateAt(long localUpdateId) {
-        SymbolState state = new SymbolState("BTCUSDT", "binance");
+        SymbolState state = new SymbolState(new SymbolKey("binance", "spot", "BTCUSDT"));
         state.setLocalUpdateId(localUpdateId);
         return state;
     }

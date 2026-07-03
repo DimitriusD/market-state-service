@@ -37,8 +37,9 @@ public class OrderBookStatusMapper {
             String message) {
 
         long now = clock.millis();
-        long eventExchangeTs = triggeringEvent != null ? triggeringEvent.metadataDto().exchangeTs() : 0;
-        long eventReceivedTs = triggeringEvent != null ? triggeringEvent.metadataDto().receivedTs() : 0;
+        MetadataDto eventMeta = triggeringEvent != null ? triggeringEvent.metadataDto() : null;
+        long eventExchangeTs = eventMeta != null ? eventMeta.exchangeTs() : 0;
+        long eventReceivedTs = eventMeta != null ? eventMeta.receivedTs() : 0;
 
         MetadataDto metadata = StateMetadataFactory.build(
                 state, EVENT_TYPE,

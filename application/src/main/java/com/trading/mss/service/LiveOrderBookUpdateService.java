@@ -51,7 +51,7 @@ public class LiveOrderBookUpdateService {
     private void applyLiveEvent(DepthDiffDto event, SymbolState state, KafkaMessageContext ctx) {
         long prevLocalUpdateId = state.getLocalUpdateId();
         state.setPreviousLocalUpdateId(prevLocalUpdateId);
-        applyDepthDiffToState(state, event, ctx, true);
+        applyDepthDiffToState(state, event, ctx);
 
         OrderBook book = state.getOrderBook();
         log.info("APPLY: symbol={} venue={} status={} trusted={} "
@@ -75,7 +75,7 @@ public class LiveOrderBookUpdateService {
         marketStatePublisher.publishSnapshotIfLive(state, event, ctx);
     }
 
-    void applyDepthDiffToState(SymbolState state, DepthDiffDto event, KafkaMessageContext ctx, boolean save) {
+    private void applyDepthDiffToState(SymbolState state, DepthDiffDto event, KafkaMessageContext ctx) {
         var metadata = event.metadataDto();
         orderBookApplier.applyDiff(state.getOrderBook(), event);
         state.setLocalUpdateId(event.finalUpdateId());
@@ -83,8 +83,6 @@ public class LiveOrderBookUpdateService {
         state.setLastEventReceivedTs(metadata.receivedTs());
         state.setLastEventProcessedTs(metadata.processedTs());
         state.recordInputContext(event, ctx);
-        if (save) {
-            stateStore.save(state);
-        }
+        stateStore.save(state);
     }
 }

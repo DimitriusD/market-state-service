@@ -1,9 +1,10 @@
 package com.trading.mss.service;
 
+import com.trading.mss.domain.model.SymbolKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.KafkaMessageContext;
-import com.trading.mss.port.input.ProcessDepthDiffUseCase;
+import com.trading.mss.port.input.DepthDiffProcessor;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import com.trading.mss.service.handler.DepthDiffStateHandlerRegistry;
 import lombok.RequiredArgsConstructor;
@@ -11,7 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @RequiredArgsConstructor
-public class ProcessDepthDiffService implements ProcessDepthDiffUseCase {
+public class DepthDiffService implements DepthDiffProcessor {
 
     private final SymbolStateStorePort stateStore;
     private final DepthDiffStateHandlerRegistry handlerRegistry;
@@ -24,10 +25,9 @@ public class ProcessDepthDiffService implements ProcessDepthDiffUseCase {
         }
 
         var metadata = event.metadataDto();
-        SymbolState state = stateStore.loadOrCreate(metadata.symbol(), metadata.exchange());
+        SymbolState state = stateStore.loadOrCreate(SymbolKey.of(metadata));
 
-        if (state.getMarketType() == null) {
-            state.setMarketType(metadata.marketType());
+        if (state.getInstrumentId() == null) {
             state.setInstrumentId(metadata.instrumentId());
             state.setBase(metadata.base());
             state.setQuote(metadata.quote());

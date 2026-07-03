@@ -3,6 +3,8 @@ package com.trading.mss.mapper;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.dto.common.MetadataDto;
 
+import java.util.regex.Pattern;
+
 /**
  * Builds the common {@link MetadataDto} envelope and event ids for published order book state events.
  */
@@ -10,6 +12,8 @@ public final class StateMetadataFactory {
 
     public static final int SCHEMA_VERSION = 1;
     public static final String SOURCE_STREAM = "market-state-service";
+
+    private static final Pattern UNSAFE_ID_CHARS = Pattern.compile("[^A-Za-z0-9]+");
 
     private StateMetadataFactory() {}
 
@@ -41,7 +45,7 @@ public final class StateMetadataFactory {
         if (raw == null || raw.isBlank()) {
             return "unknown";
         }
-        return raw.replaceAll("[^A-Za-z0-9]+", "-");
+        return UNSAFE_ID_CHARS.matcher(raw).replaceAll("-");
     }
 
     private static String nullToEmpty(String s) {
