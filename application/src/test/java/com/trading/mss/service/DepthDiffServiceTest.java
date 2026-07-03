@@ -43,7 +43,7 @@ import java.util.concurrent.ConcurrentMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class ProcessDepthDiffServiceTest {
+class DepthDiffServiceTest {
 
     private static final int SNAPSHOT_DEPTH_LIMIT = 1000;
     private static final int MAX_BUFFERED_EVENTS = 10;
@@ -512,7 +512,7 @@ class ProcessDepthDiffServiceTest {
                     stateStore.loadOrCreate(KEY).getStatus());
             assertEquals(1, snapshotPort.getLoadCalls());
 
-            // Completing the fetch drives the state machine on its own — no further diff needed.
+            // Completing the fetch drives the state machine on its own вЂ” no further diff needed.
             snapshotPort.completePending();
 
             SymbolState after = stateStore.loadOrCreate(KEY);
@@ -977,7 +977,7 @@ class ProcessDepthDiffServiceTest {
 
     /**
      * Deterministic serialized executor: commands are queued and drained to exhaustion on the
-     * calling thread, but never run reentrantly inside the submitting command — mirroring the
+     * calling thread, but never run reentrantly inside the submitting command вЂ” mirroring the
      * production dispatcher's ordering semantics (unlike a naive {@code Runnable::run}).
      */
     static class TrampolineSymbolExecutor implements SymbolExecutorPort {

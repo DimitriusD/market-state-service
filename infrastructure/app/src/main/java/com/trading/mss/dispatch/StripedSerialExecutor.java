@@ -40,6 +40,8 @@ public class StripedSerialExecutor implements SymbolExecutorPort, SmartLifecycle
 
     private final Stripe[] stripes;
     private final AtomicLong droppedAfterClose = new AtomicLong();
+    private final AtomicLong enqueueBlockedCount = new AtomicLong();
+    private final AtomicLong enqueueBlockedTotalMs = new AtomicLong();
 
     private volatile boolean accepting = false;
 
@@ -87,11 +89,20 @@ public class StripedSerialExecutor implements SymbolExecutorPort, SmartLifecycle
             stripe.localTasks.addLast(task);
             return;
         }
+        if (stripe.queue.offer(task)) {
+            return;
+        }
+        // Queue full: block the caller (backpressure) and record how long — sustained block time
+        // here is the early-warning signal before max.poll.interval.ms trouble.
+        long blockedSince = System.nanoTime();
         try {
             stripe.queue.put(task);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RejectedExecutionException("Interrupted while enqueuing command for " + key.canonical(), e);
+        } finally {
+            enqueueBlockedCount.incrementAndGet();
+            enqueueBlockedTotalMs.addAndGet((System.nanoTime() - blockedSince) / 1_000_000);
         }
     }
 
@@ -163,6 +174,19 @@ public class StripedSerialExecutor implements SymbolExecutorPort, SmartLifecycle
 
     public long droppedAfterCloseCount() {
         return droppedAfterClose.get();
+    }
+
+    /** Approximate (thread-confined deque read from outside) — for gauges only. */
+    public int localTasksDepth(int stripeIndex) {
+        return stripes[stripeIndex].localTasks.size();
+    }
+
+    public long enqueueBlockedCount() {
+        return enqueueBlockedCount.get();
+    }
+
+    public long enqueueBlockedTotalMs() {
+        return enqueueBlockedTotalMs.get();
     }
 
     // --- Stripe ----------------------------------------------------------------------------------

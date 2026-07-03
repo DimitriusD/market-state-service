@@ -26,8 +26,8 @@ The Gradle wrapper is the entry point. On Windows use `.\gradlew.bat`; the Bash 
 Run a single test class or method (JUnit 5 platform):
 
 ```powershell
-.\gradlew.bat :application:test --tests "com.trading.mss.service.ProcessDepthDiffServiceTest"
-.\gradlew.bat :application:test --tests "com.trading.mss.service.ProcessDepthDiffServiceTest.Bootstrap.successfulBootstrap_goesLive"
+.\gradlew.bat :application:test --tests "com.trading.mss.service.DepthDiffServiceTest"
+.\gradlew.bat :application:test --tests "com.trading.mss.service.DepthDiffServiceTest.Bootstrap.successfulBootstrap_goesLive"
 ```
 
 Local infrastructure (Kafka in KRaft mode, Confluent Schema Registry on :8081, Kafka UI on :8088):
@@ -60,11 +60,21 @@ The `application` module classes are **not** Spring components — they have no 
 
 The adapter modules *do* use `@Configuration`/`@Bean` classes (e.g. `KafkaConsumerConfig`, `KafkaProducerConfig`) — these are picked up by component scan because `Application` lives at `com.trading.mss` and every module shares that base package.
 
+### Command dispatch model — the serialization invariant
+
+All `SymbolState` mutation happens inside **serialized per-symbol commands** submitted through `SymbolExecutorPort`, implemented by [StripedSerialExecutor](infrastructure/app/src/main/java/com/trading/mss/dispatch/StripedSerialExecutor.java) (N stripes, default 1 = a global event loop; a symbol is pinned to a stripe by `SymbolKey.canonical()` hash). Three command sources:
+
+1. **Kafka**: `DepthDiffConsumer` validates, deserializes and enqueues `processor.process(dto, ctx)` — blocking `put` (backpressure). Offsets commit after enqueue, not after processing; acceptable because state is in-memory and rebuilt via bootstrap after restart.
+2. **Snapshot callbacks**: `DepthDiffBootstrapService.startBootstrapIfNeeded` attaches `whenCompleteAsync(..., executorFor(key))` — the fetch result is applied the moment it arrives (`onSnapshotReady`), guarded by `bootstrapEpoch` + `SNAPSHOT_LOADING` against superseded fetches. There is no polling.
+3. **Watchdog ticks**: `SymbolStateWatchdog` (`@Scheduled`, 1s) submits `SymbolTickService.onTick(key)` via non-blocking `tryExecute` (droppable). Ticks restart bootstrap after the cooldown (even with an empty buffer), time out lost snapshot fetches, and enforce two-tier staleness: soft (status event, `trusted` unchanged) then hard (full resync — a dead stream degrades into controlled REST polling).
+
+Rules that follow: never touch a `SymbolState` outside its command (the store's `keys()` deliberately returns only immutable `SymbolKey`s); never pass a `SymbolState` reference across an async boundary — pass the `SymbolKey` and re-resolve inside the command; when a command running on a stripe submits a follow-up to the same stripe, the executor routes it through a local deque (never blocks on its own queue). The dispatcher is a `SmartLifecycle` at phase 0 so Kafka containers stop first and accepted commands drain on shutdown.
+
 ### Core flow: per-symbol state machine via handler registry
 
-The central use case is `ProcessDepthDiffUseCase.process(DepthDiffDto, KafkaMessageContext)`, implemented by [ProcessDepthDiffService](application/src/main/java/com/trading/mss/service/ProcessDepthDiffService.java). It:
+The central use case is `DepthDiffProcessor.process(DepthDiffDto, KafkaMessageContext)`, implemented by [DepthDiffService](application/src/main/java/com/trading/mss/service/DepthDiffService.java). It:
 
-1. loads/creates the `SymbolState` for the event's `(symbol, exchange)`,
+1. loads/creates the `SymbolState` for the event's `SymbolKey` (exchange, marketType, symbol),
 2. dispatches to a `DepthDiffStateHandler` chosen by the current `SymbolStateStatus`.
 
 `DepthDiffStateHandlerRegistry` is an `EnumMap<SymbolStateStatus, DepthDiffStateHandler>`. Status → handler mapping:
@@ -79,7 +89,7 @@ The bootstrap/live/resync algorithms (snapshot staleness check, bridging-event c
 
 ### Conventions that matter for correctness
 
-- **Per-symbol sequential processing is required.** Sequence checks (`U`, `u`, `localUpdateId`) are only valid if one symbol is never mutated concurrently. The input topic must be keyed by symbol; do not introduce parallel processing of a single symbol.
+- **Per-symbol sequential processing is required.** Sequence checks (`U`, `u`, `localUpdateId`) are only valid if one symbol is never mutated concurrently. The dispatcher (see above) is the enforcement mechanism; the input topic must still be keyed by symbol so enqueue order matches offset order. A full stripe queue blocks the Kafka listener — watch `mss.dispatcher.enqueue.blocked.time`; a sustained block risks `max.poll.interval.ms` (consumer pause/resume is a known future refinement).
 - **Prices and quantities are scaled `long`s, not `BigDecimal`/`double`.** [ScaledDecimal](application/src/main/java/com/trading/mss/domain/model/ScaledDecimal.java) converts to/from strings using a fixed scale of `1e8` (8 digits). The `OrderBook` stores `NavigableMap<Long, Long>` (bids descending, asks ascending). Use `ScaledDecimal.parse`/`format` at the boundaries; keep the book in scaled longs.
 - **State is in-memory only** (`InMemorySymbolStateStore`). On restart, state is rebuilt from snapshot + buffered diffs — there is no persistence layer.
 - **DTOs are Java records**; Avro ↔ DTO mappers in the kafka-adapter are static utility classes (e.g. `DepthDiffAvroMapper.toDto`). The domain never touches Avro types directly.
@@ -87,4 +97,4 @@ The bootstrap/live/resync algorithms (snapshot staleness check, bridging-event c
 
 ### Configuration
 
-Runtime config is in [application.yml](infrastructure/app/src/main/resources/application.yml), all overridable via `APP_*` env vars: Kafka bootstrap/group, Schema Registry URL, in/out topic names, Binance REST base URL + snapshot depth limit (`1000`), max buffered events (`10000`), and published top-N depth (`10`).
+Runtime config is in [application.yml](infrastructure/app/src/main/resources/application.yml), all overridable via `APP_*` env vars: Kafka bootstrap/group, Schema Registry URL, in/out topic names, Binance REST base URL + snapshot depth limit (`1000`), max buffered events (`10000`), published top-N depth (`10`), dispatcher stripes/queue capacity (`1`/`10000`), watchdog interval (`1000`), snapshot timeout (`60000` — must exceed the fetch worst case, validated with a WARN at wiring), and staleness soft/hard thresholds (`30000`/`120000`).
