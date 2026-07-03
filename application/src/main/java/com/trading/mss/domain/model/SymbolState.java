@@ -36,6 +36,12 @@ public class SymbolState {
     private long lastEventReceivedTs;
     private long lastEventProcessedTs;
 
+    // Wall-clock time of the last successful apply (diff or snapshot) on THIS host; the staleness
+    // watchdog compares against it. Exchange/received timestamps are unsuitable (clock skew).
+    private long lastAppliedWallTs;
+    // Edge-trigger flag: a soft-stale status was published and not yet cleared by a fresh apply.
+    private boolean staleReported = false;
+
     // Monotonic per-instrument sequence assigned to each published OrderBookL2SnapshotEvent.
     private long stateSeq = 0;
 

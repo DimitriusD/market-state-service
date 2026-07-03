@@ -10,6 +10,8 @@ import com.trading.mss.port.output.SymbolStateStorePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.Clock;
+
 @Slf4j
 @RequiredArgsConstructor
 public class LiveOrderBookUpdateService {
@@ -19,6 +21,7 @@ public class LiveOrderBookUpdateService {
     private final SymbolStateStorePort stateStore;
     private final SymbolStateLifecycleService lifecycleService;
     private final MarketStatePublisher marketStatePublisher;
+    private final Clock clock;
 
     public void handleLive(DepthDiffDto event, SymbolState state, KafkaMessageContext ctx) {
         SyncDecision decision = syncPolicy.evaluate(event, state);
@@ -72,6 +75,7 @@ public class LiveOrderBookUpdateService {
             return;
         }
 
+        lifecycleService.clearStaleIfReported(state);
         marketStatePublisher.publishSnapshotIfLive(state, event, ctx);
     }
 
@@ -82,6 +86,7 @@ public class LiveOrderBookUpdateService {
         state.setLastEventExchangeTs(metadata.exchangeTs());
         state.setLastEventReceivedTs(metadata.receivedTs());
         state.setLastEventProcessedTs(metadata.processedTs());
+        state.setLastAppliedWallTs(clock.millis());
         state.recordInputContext(event, ctx);
         stateStore.save(state);
     }

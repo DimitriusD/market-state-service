@@ -19,6 +19,7 @@ import com.trading.mss.port.output.SymbolStateStorePort;
 import com.trading.mss.service.*;
 import com.trading.mss.service.handler.*;
 import com.trading.mss.store.InMemorySymbolStateStore;
+import com.trading.mss.watchdog.SymbolStateWatchdog;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.client.ClientHttpRequestFactories;
 import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
@@ -155,9 +156,10 @@ public class InfrastructureConfig {
     public SymbolStateLifecycleService symbolStateLifecycleService(
             SymbolStateStorePort symbolStateStore,
             OrderBookStatusMapper orderBookStatusMapper,
-            PublishOrderBookStatusPort publishOrderBookStatusPort) {
+            PublishOrderBookStatusPort publishOrderBookStatusPort,
+            Clock clock) {
         return new SymbolStateLifecycleService(
-                symbolStateStore, orderBookStatusMapper, publishOrderBookStatusPort);
+                symbolStateStore, orderBookStatusMapper, publishOrderBookStatusPort, clock);
     }
 
     @Bean
@@ -179,13 +181,15 @@ public class InfrastructureConfig {
             BinanceSpotSyncPolicy syncPolicy,
             SymbolStateStorePort symbolStateStore,
             SymbolStateLifecycleService symbolStateLifecycleService,
-            MarketStatePublisher marketStatePublisher) {
+            MarketStatePublisher marketStatePublisher,
+            Clock clock) {
         return new LiveOrderBookUpdateService(
                 orderBookApplier,
                 syncPolicy,
                 symbolStateStore,
                 symbolStateLifecycleService,
-                marketStatePublisher);
+                marketStatePublisher,
+                clock);
     }
 
     @Bean
@@ -247,5 +251,47 @@ public class InfrastructureConfig {
             SymbolStateStorePort symbolStateStore,
             DepthDiffStateHandlerRegistry depthDiffStateHandlerRegistry) {
         return new DepthDiffService(symbolStateStore, depthDiffStateHandlerRegistry);
+    }
+
+    @Bean
+    public SymbolTickService symbolTickService(
+            SymbolStateStorePort symbolStateStore,
+            DepthDiffBootstrapService depthDiffBootstrapService,
+            SymbolStateLifecycleService symbolStateLifecycleService,
+            Clock clock,
+            @Value("${app.state.bootstrap-cooldown-ms:5000}") long bootstrapCooldownMs,
+            @Value("${app.state.snapshot-timeout-ms:60000}") long snapshotTimeoutMs,
+            @Value("${app.state.staleness.soft-threshold-ms:30000}") long softStalenessMs,
+            @Value("${app.state.staleness.hard-threshold-ms:120000}") long hardStalenessMs,
+            @Value("${app.binance.rest.connect-timeout-ms:3000}") long connectTimeoutMs,
+            @Value("${app.binance.rest.read-timeout-ms:5000}") long readTimeoutMs,
+            @Value("${app.bootstrap.snapshot-fetch-max-retries:3}") int fetchMaxRetries,
+            @Value("${app.bootstrap.snapshot-fetch-max-backoff-ms:2000}") long fetchMaxBackoffMs) {
+        // A too-low timeout double-fires against a slow-but-alive fetch: the epoch guard keeps that
+        // correct, but it wastes rate-limit budget and emits spurious SNAPSHOT_LOAD_FAILED statuses.
+        long fetchWorstCaseMs = (long) (fetchMaxRetries * (connectTimeoutMs + readTimeoutMs + 1.5 * fetchMaxBackoffMs));
+        if (snapshotTimeoutMs <= fetchWorstCaseMs) {
+            org.slf4j.LoggerFactory.getLogger(InfrastructureConfig.class).warn(
+                    "app.state.snapshot-timeout-ms={} is below the fetch worst case ~{}ms "
+                            + "(maxRetries x (connect + read + 1.5 x maxBackoff)) — expect spurious snapshot timeouts",
+                    snapshotTimeoutMs, fetchWorstCaseMs);
+        }
+        return new SymbolTickService(
+                symbolStateStore,
+                depthDiffBootstrapService,
+                symbolStateLifecycleService,
+                clock,
+                bootstrapCooldownMs,
+                snapshotTimeoutMs,
+                softStalenessMs,
+                hardStalenessMs);
+    }
+
+    @Bean
+    public SymbolStateWatchdog symbolStateWatchdog(
+            SymbolStateStorePort symbolStateStore,
+            StripedSerialExecutor symbolExecutor,
+            SymbolTickService symbolTickService) {
+        return new SymbolStateWatchdog(symbolStateStore, symbolExecutor, symbolTickService);
     }
 }

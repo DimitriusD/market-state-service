@@ -38,6 +38,16 @@ app:
   state:
     max-buffered-events: ${APP_STATE_MAX_BUFFERED_EVENTS:10000}
     bootstrap-cooldown-ms: ${APP_STATE_BOOTSTRAP_COOLDOWN_MS:5000}
+    # SNAPSHOT_LOADING watchdog: must exceed the fetch worst case
+    # (max-retries x (connect + read + 1.5 x max-backoff), ~30s with defaults).
+    snapshot-timeout-ms: ${APP_STATE_SNAPSHOT_TIMEOUT_MS:60000}
+    staleness:
+      # Soft: publish STALE_STATE status, trusted unchanged (silence may be a quiet market).
+      soft-threshold-ms: ${APP_STATE_STALENESS_SOFT_THRESHOLD_MS:30000}
+      # Hard: full resync; with a dead stream this degrades into controlled REST polling.
+      hard-threshold-ms: ${APP_STATE_STALENESS_HARD_THRESHOLD_MS:120000}
+    watchdog:
+      interval-ms: ${APP_STATE_WATCHDOG_INTERVAL_MS:1000}
     dispatcher:
       # 1 = deterministic global event loop; use 4-8 for 100+ active symbols
       # (with 1 stripe a slow symbol delays all others).

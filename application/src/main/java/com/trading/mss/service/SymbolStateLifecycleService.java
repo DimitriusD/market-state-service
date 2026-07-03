@@ -12,6 +12,8 @@ import com.trading.mss.port.output.SymbolStateStorePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.Clock;
+
 @Slf4j
 @RequiredArgsConstructor
 public class SymbolStateLifecycleService {
@@ -19,6 +21,7 @@ public class SymbolStateLifecycleService {
     private final SymbolStateStorePort stateStore;
     private final OrderBookStatusMapper statusMapper;
     private final PublishOrderBookStatusPort statusPublisher;
+    private final Clock clock;
 
     /**
      * Always reached via the snapshot callback command, so there is no "current record" context:
@@ -32,6 +35,10 @@ public class SymbolStateLifecycleService {
         state.setStatus(SymbolStateStatus.LIVE);
         state.setTrusted(true);
         state.setBootstrapInProgress(false);
+        // Applying the snapshot counts as an apply, otherwise a symbol LIVE'd with no follow-up
+        // diff would trip the staleness watchdog immediately.
+        state.setLastAppliedWallTs(clock.millis());
+        state.setStaleReported(false);
         stateStore.save(state);
 
         OrderBook book = state.getOrderBook();
@@ -85,6 +92,34 @@ public class SymbolStateLifecycleService {
         // Invalidates any in-flight snapshot fetch: its callback carries the old epoch.
         state.incrementBootstrapEpoch();
         state.setTrusted(false);
+    }
+
+    /**
+     * Soft staleness: no applies for a while, but the book is internally consistent — report it,
+     * leave {@code trusted} untouched (silence may be a quiet market). Edge-triggered via
+     * {@code staleReported}; cleared by {@link #clearStaleIfReported} on the next successful apply.
+     */
+    public void reportSoftStale(SymbolState state, long ageMs) {
+        state.setStaleReported(true);
+        stateStore.save(state);
+
+        log.warn("STALE_STATE: symbol={} ageMs={} localUpdateId={} — book internally consistent, freshness degraded",
+                state.getSymbol(), ageMs, state.getLocalUpdateId());
+
+        publishStatus(state, OrderBookReason.STALE_STATE, null, null,
+                "No updates for " + ageMs + "ms; book internally consistent, freshness degraded");
+    }
+
+    /** Publishes the recovery counterpart of a previously reported soft-stale status. */
+    public void clearStaleIfReported(SymbolState state) {
+        if (!state.isStaleReported()) {
+            return;
+        }
+        state.setStaleReported(false);
+        stateStore.save(state);
+
+        log.info("STALE_RECOVERED: symbol={} localUpdateId={}", state.getSymbol(), state.getLocalUpdateId());
+        publishStatus(state, OrderBookReason.NONE, null, null, "State fresh again");
     }
 
     private void publishStatus(SymbolState state, OrderBookReason reason, DepthDiffDto event,

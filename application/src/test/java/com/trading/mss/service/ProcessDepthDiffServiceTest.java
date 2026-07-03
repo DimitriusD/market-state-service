@@ -49,6 +49,9 @@ class ProcessDepthDiffServiceTest {
     private static final int MAX_BUFFERED_EVENTS = 10;
     private static final int PUBLISHED_LEVELS = 10;
     private static final long BOOTSTRAP_COOLDOWN_MS = 5000;
+    private static final long SNAPSHOT_TIMEOUT_MS = 60_000;
+    private static final long SOFT_STALE_MS = 30_000;
+    private static final long HARD_STALE_MS = 120_000;
 
     private static final String INPUT_TOPIC = "canonical.market.depthdiff.v1";
     private static final SymbolKey KEY = new SymbolKey("binance", "spot", "BTCUSDT");
@@ -60,6 +63,7 @@ class ProcessDepthDiffServiceTest {
     private MutableClock clock;
     private TrampolineSymbolExecutor symbolExecutor;
     private DepthDiffService service;
+    private SymbolTickService tickService;
 
     @BeforeEach
     void setUp() {
@@ -76,7 +80,7 @@ class ProcessDepthDiffServiceTest {
         OrderBookApplier orderBookApplier = new OrderBookApplier();
         BinanceSpotSyncPolicy syncPolicy = new BinanceSpotSyncPolicy();
         SymbolStateLifecycleService lifecycleService = new SymbolStateLifecycleService(
-                stateStore, new OrderBookStatusMapper(clock), statusPublisher);
+                stateStore, new OrderBookStatusMapper(clock), statusPublisher, clock);
         MarketStatePublisher marketStatePublisher = new MarketStatePublisher(
                 new OrderBookL2SnapshotMapper(clock),
                 snapshotPublisher,
@@ -88,7 +92,8 @@ class ProcessDepthDiffServiceTest {
                 syncPolicy,
                 stateStore,
                 lifecycleService,
-                marketStatePublisher
+                marketStatePublisher,
+                clock
         );
         DepthDiffBootstrapService depthDiffBootstrapService = new DepthDiffBootstrapService(
                 orderBookApplier,
@@ -116,7 +121,22 @@ class ProcessDepthDiffServiceTest {
         ));
         registry.registerAdditionalStatus(SymbolStateStatus.APPLYING_BUFFER, bootstrapPhaseHandler);
 
+        tickService = new SymbolTickService(
+                stateStore,
+                depthDiffBootstrapService,
+                lifecycleService,
+                clock,
+                BOOTSTRAP_COOLDOWN_MS,
+                SNAPSHOT_TIMEOUT_MS,
+                SOFT_STALE_MS,
+                HARD_STALE_MS);
+
         return new DepthDiffService(stateStore, registry);
+    }
+
+    /** Delivers a tick the same way the watchdog does: as a serialized command. */
+    private void tick() {
+        symbolExecutor.tryExecute(KEY, () -> tickService.onTick(KEY));
     }
 
     @Nested
@@ -749,6 +769,148 @@ class ProcessDepthDiffServiceTest {
             assertEquals("BTC", snap.metadata().base());
             assertEquals("USDT", snap.metadata().quote());
             assertEquals("ORDERBOOK_L2_SNAPSHOT", snap.metadata().eventType());
+        }
+    }
+
+    @Nested
+    class Ticks {
+
+        @Test
+        void tickRestartsBootstrapFromResyncing_withoutAnyTraffic() {
+            snapshotPort.setException(new RuntimeException("HTTP 500"));
+            service.process(event(100, 110, List.of(), List.of()), ctx(1));
+            assertEquals(SymbolStateStatus.RESYNCING, stateStore.loadOrCreate(KEY).getStatus());
+            int loadsAfterFailure = snapshotPort.getLoadCalls();
+
+            snapshotPort.setSnapshot(snapshot(300,
+                    List.of(new PriceLevelDto("51000.00", "1.0")),
+                    List.of(new PriceLevelDto("51001.00", "1.0"))));
+            clock.advance(BOOTSTRAP_COOLDOWN_MS + 1);
+            tick();
+
+            SymbolState state = stateStore.loadOrCreate(KEY);
+            assertEquals(SymbolStateStatus.LIVE, state.getStatus());
+            assertTrue(state.isTrusted());
+            assertEquals(300, state.getLocalUpdateId());
+            assertTrue(snapshotPort.getLoadCalls() > loadsAfterFailure);
+        }
+
+        @Test
+        void tickDoesNotRestartBootstrapWithinCooldown() {
+            snapshotPort.setException(new RuntimeException("HTTP 500"));
+            service.process(event(100, 110, List.of(), List.of()), ctx(1));
+            int loadsAfterFailure = snapshotPort.getLoadCalls();
+
+            tick();
+
+            assertEquals(SymbolStateStatus.RESYNCING, stateStore.loadOrCreate(KEY).getStatus());
+            assertEquals(loadsAfterFailure, snapshotPort.getLoadCalls());
+        }
+
+        @Test
+        void snapshotTimeout_entersResyncing_lateCallbackDiscarded_thenTickRecovers() {
+            snapshotPort.setManualCompletion(true);
+            snapshotPort.setSnapshot(snapshot(100,
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
+            service.process(event(98, 105, List.of(), List.of()), ctx(1));
+            assertEquals(SymbolStateStatus.SNAPSHOT_LOADING, stateStore.loadOrCreate(KEY).getStatus());
+
+            clock.advance(SNAPSHOT_TIMEOUT_MS + 1);
+            tick();
+            assertEquals(SymbolStateStatus.RESYNCING, stateStore.loadOrCreate(KEY).getStatus());
+            assertLastStatusReason(OrderBookReason.SNAPSHOT_LOAD_FAILED);
+
+            // The presumed-lost fetch completes late: must be discarded (status/epoch guard).
+            snapshotPort.completeOldest();
+            assertEquals(SymbolStateStatus.RESYNCING, stateStore.loadOrCreate(KEY).getStatus());
+            assertTrue(stateStore.loadOrCreate(KEY).getOrderBook().getBids().isEmpty());
+
+            // Next tick restarts bootstrap (cooldown long expired) and recovers to LIVE.
+            snapshotPort.setSnapshot(snapshot(400,
+                    List.of(new PriceLevelDto("52000.00", "1.0")),
+                    List.of(new PriceLevelDto("52001.00", "1.0"))));
+            tick();
+            snapshotPort.completeOldest();
+
+            SymbolState state = stateStore.loadOrCreate(KEY);
+            assertEquals(SymbolStateStatus.LIVE, state.getStatus());
+            assertTrue(state.isTrusted());
+            assertEquals(400, state.getLocalUpdateId());
+        }
+
+        @Test
+        void softStale_publishesStatusOnce_trustedUnchanged_thenRecoversOnApply() {
+            bootstrapToLiveAt100();
+
+            clock.advance(SOFT_STALE_MS + 1);
+            tick();
+
+            SymbolState state = stateStore.loadOrCreate(KEY);
+            assertEquals(SymbolStateStatus.LIVE, state.getStatus());
+            assertTrue(state.isTrusted(), "soft stale must not revoke trust");
+            assertTrue(state.isStaleReported());
+            assertLastStatusReason(OrderBookReason.STALE_STATE);
+            int statusCount = statusPublisher.published.size();
+
+            tick();
+            assertEquals(statusCount, statusPublisher.published.size(), "soft stale must be edge-triggered");
+
+            service.process(event(106, 110,
+                    List.of(new PriceLevelDto("49999.00", "2.0")), List.of()), ctx(2));
+
+            SymbolState after = stateStore.loadOrCreate(KEY);
+            assertFalse(after.isStaleReported());
+            assertLastStatusReason(OrderBookReason.NONE);
+            assertEquals(SymbolStateStatus.LIVE, after.getStatus());
+        }
+
+        @Test
+        void hardStale_entersResyncing_thenTickRebootstrapsFromRest() {
+            bootstrapToLiveAt100();
+
+            clock.advance(HARD_STALE_MS + 1);
+            snapshotPort.setSnapshot(snapshot(500,
+                    List.of(new PriceLevelDto("53000.00", "1.0")),
+                    List.of(new PriceLevelDto("53001.00", "1.0"))));
+            tick();
+
+            // Hard stale -> RESYNCING (reason STALE_STATE), and since the cooldown has long
+            // expired the next tick immediately re-bootstraps from REST.
+            assertTrue(statusPublisher.published.stream()
+                            .anyMatch(s -> s.reason() == OrderBookReason.STALE_STATE
+                                    && s.lifecycleStatus() == SymbolStateStatus.RESYNCING),
+                    "hard stale must publish a RESYNCING status with reason STALE_STATE");
+
+            tick();
+
+            SymbolState state = stateStore.loadOrCreate(KEY);
+            assertEquals(SymbolStateStatus.LIVE, state.getStatus());
+            assertTrue(state.isTrusted());
+            assertEquals(500, state.getLocalUpdateId());
+        }
+
+        @Test
+        void tickIsNoopForHealthyLiveSymbol() {
+            bootstrapToLiveAt100();
+            int statusCount = statusPublisher.published.size();
+            int snapshotCount = snapshotPublisher.published.size();
+            int loadCalls = snapshotPort.getLoadCalls();
+
+            tick();
+
+            assertEquals(SymbolStateStatus.LIVE, stateStore.loadOrCreate(KEY).getStatus());
+            assertEquals(statusCount, statusPublisher.published.size());
+            assertEquals(snapshotCount, snapshotPublisher.published.size());
+            assertEquals(loadCalls, snapshotPort.getLoadCalls());
+        }
+
+        private void bootstrapToLiveAt100() {
+            snapshotPort.setSnapshot(snapshot(100,
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
+            service.process(event(98, 105, List.of(), List.of()), ctx(1));
+            assertEquals(SymbolStateStatus.LIVE, stateStore.loadOrCreate(KEY).getStatus());
         }
     }
 
