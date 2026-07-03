@@ -5,21 +5,26 @@ import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.SyncDecision;
+import com.trading.mss.domain.model.SymbolKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.KafkaMessageContext;
 import com.trading.mss.port.output.AsyncSnapshotPort;
+import com.trading.mss.port.output.SymbolExecutorPort;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Clock;
 import java.util.Deque;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
+/**
+ * Snapshot + buffered-diff bootstrap. Fully callback-driven: the snapshot fetch result is delivered
+ * as a command on this symbol's serialized executor via {@link #onSnapshotReady}, so bootstrap
+ * progresses even when no further diffs arrive for the symbol.
+ */
 @Slf4j
 @RequiredArgsConstructor
 public class DepthDiffBootstrapService {
@@ -30,11 +35,12 @@ public class DepthDiffBootstrapService {
     private final SymbolStateStorePort stateStore;
     private final SymbolStateLifecycleService lifecycleService;
     private final MarketStatePublisher marketStatePublisher;
+    private final SymbolExecutorPort symbolExecutor;
     private final int snapshotDepthLimit;
     private final Clock clock;
     private final long bootstrapCooldownMs;
 
-    public void startBootstrapIfNeeded(SymbolState state, KafkaMessageContext ctx) {
+    public void startBootstrapIfNeeded(SymbolState state) {
         if (state.isBootstrapInProgress()) {
             stateStore.save(state);
             return;
@@ -54,48 +60,64 @@ public class DepthDiffBootstrapService {
         state.setBootstrapInProgress(true);
         state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
         state.incrementSnapshotRetryCount();
-        state.setPendingSnapshot(asyncSnapshotPort.fetch(state.getSymbol(), snapshotDepthLimit));
+        long epoch = state.incrementBootstrapEpoch();
         stateStore.save(state);
 
-        log.info("SNAPSHOT_FETCH_SUBMITTED: symbol={} depthLimit={} bufferSize={}",
-                state.getSymbol(), snapshotDepthLimit, state.getBufferedEvents().size());
+        log.info("SNAPSHOT_FETCH_SUBMITTED: symbol={} depthLimit={} bufferSize={} epoch={}",
+                state.getSymbol(), snapshotDepthLimit, state.getBufferedEvents().size(), epoch);
 
-        tryApplyPendingSnapshot(state, ctx);
+        SymbolKey key = state.key();
+        // Attached as the LAST statement on purpose: if the future is already complete, the
+        // callback command is enqueued (or run) immediately — nothing here may run after it.
+        asyncSnapshotPort.fetch(state.getSymbol(), snapshotDepthLimit)
+                .whenCompleteAsync(
+                        (snapshot, error) -> onSnapshotReady(key, epoch, snapshot, error),
+                        symbolExecutor.executorFor(key));
     }
 
-    public void tryApplyPendingSnapshot(SymbolState state, KafkaMessageContext ctx) {
-        CompletableFuture<OrderBookSnapshot> future = state.getPendingSnapshot();
-        if (future == null || !future.isDone()) {
-            return;
-        }
-        state.setPendingSnapshot(null);
-
-        OrderBookSnapshot snapshot;
+    /**
+     * Runs as a serialized command for {@code key}. Takes the key, not the state: mutable state
+     * must not cross the async boundary — it is re-resolved inside the command.
+     */
+    void onSnapshotReady(SymbolKey key, long epoch, OrderBookSnapshot snapshot, Throwable error) {
+        SymbolState state = stateStore.loadOrCreate(key);
         try {
-            snapshot = future.join();
-        } catch (CompletionException | CancellationException e) {
-            Throwable cause = e instanceof CompletionException && e.getCause() != null ? e.getCause() : e;
-            log.error("Snapshot fetch failed: symbol={} error={}", state.getSymbol(), cause.getMessage());
-            lifecycleService.enterResyncing(state, OrderBookReason.SNAPSHOT_LOAD_FAILED, ctx);
-            return;
-        }
+            if (epoch != state.getBootstrapEpoch() || state.getStatus() != SymbolStateStatus.SNAPSHOT_LOADING) {
+                log.info("STALE_SNAPSHOT_CALLBACK: symbol={} callbackEpoch={} currentEpoch={} status={} — discarding",
+                        state.getSymbol(), epoch, state.getBootstrapEpoch(), state.getStatus());
+                return;
+            }
 
-        if (snapshot == null) {
-            log.error("Snapshot fetch returned null: symbol={}", state.getSymbol());
-            lifecycleService.enterResyncing(state, OrderBookReason.SNAPSHOT_LOAD_FAILED, ctx);
-            return;
-        }
+            if (error != null) {
+                Throwable cause = error instanceof CompletionException && error.getCause() != null
+                        ? error.getCause() : error;
+                log.error("Snapshot fetch failed: symbol={} epoch={} error={}",
+                        state.getSymbol(), epoch, cause.getMessage());
+                lifecycleService.enterResyncing(state, OrderBookReason.SNAPSHOT_LOAD_FAILED, null);
+                return;
+            }
 
-        applySnapshotAndReplay(state, snapshot, ctx);
+            if (snapshot == null) {
+                log.error("Snapshot fetch returned null: symbol={}", state.getSymbol());
+                lifecycleService.enterResyncing(state, OrderBookReason.SNAPSHOT_LOAD_FAILED, null);
+                return;
+            }
+
+            applySnapshotAndReplay(state, snapshot);
+        } catch (RuntimeException e) {
+            // whenCompleteAsync would swallow this into a dependent future nobody observes.
+            log.error("Unexpected failure applying snapshot: symbol={} epoch={}", state.getSymbol(), epoch, e);
+            lifecycleService.enterResyncing(state, OrderBookReason.UNKNOWN_ERROR, null);
+        }
     }
 
-    private void applySnapshotAndReplay(SymbolState state, OrderBookSnapshot snapshot, KafkaMessageContext ctx) {
+    private void applySnapshotAndReplay(SymbolState state, OrderBookSnapshot snapshot) {
         Long firstBufferedUpdateId = state.getFirstBufferedUpdateId();
         if (firstBufferedUpdateId != null
                 && syncPolicy.isSnapshotTooOld(snapshot.lastUpdateId(), firstBufferedUpdateId)) {
             log.warn("Snapshot too old: symbol={} snapshotLastUpdateId={} firstBufferedUpdateId={}",
                     state.getSymbol(), snapshot.lastUpdateId(), firstBufferedUpdateId);
-            lifecycleService.enterResyncing(state, OrderBookReason.SNAPSHOT_TOO_OLD, ctx);
+            lifecycleService.enterResyncing(state, OrderBookReason.SNAPSHOT_TOO_OLD, null);
             return;
         }
 
@@ -113,7 +135,7 @@ public class DepthDiffBootstrapService {
                 state.getSymbol(), snapshot.lastUpdateId(), bufferBefore, bufferAfter);
 
         if (state.getBufferedEvents().isEmpty()) {
-            finishBootstrapToLive(state, ctx, true);
+            finishBootstrapToLive(state);
             return;
         }
 
@@ -121,7 +143,7 @@ public class DepthDiffBootstrapService {
         if (!syncPolicy.isBridgingEvent(firstRemainingEvent, snapshot.lastUpdateId())) {
             log.warn("No bridging event: symbol={} firstU={} u={} snapshotLastUpdateId={}",
                     state.getSymbol(), firstRemainingEvent.firstUpdateId(), firstRemainingEvent.finalUpdateId(), snapshot.lastUpdateId());
-            lifecycleService.enterResyncing(state, OrderBookReason.NO_BRIDGING_EVENT, ctx);
+            lifecycleService.enterResyncing(state, OrderBookReason.NO_BRIDGING_EVENT, null);
             return;
         }
 
@@ -129,18 +151,18 @@ public class DepthDiffBootstrapService {
             return;
         }
 
-        finishBootstrapToLive(state, ctx, false);
+        finishBootstrapToLive(state);
     }
 
-    private void finishBootstrapToLive(SymbolState state, KafkaMessageContext ctx, boolean setOffsetFromCurrentContext) {
+    private void finishBootstrapToLive(SymbolState state) {
         OrderBook book = state.getOrderBook();
         if (book.isCrossed()) {
             log.warn("CROSSED_BOOK after bootstrap: symbol={} bestBid={} bestAsk={} snapshotLastUpdateId={} — entering resync instead of going LIVE",
                     state.getSymbol(), book.bestBid(), book.bestAsk(), state.getLastSnapshotUpdateId());
-            lifecycleService.enterResyncing(state, OrderBookReason.CROSSED_BOOK, ctx);
+            lifecycleService.enterResyncing(state, OrderBookReason.CROSSED_BOOK, null);
             return;
         }
-        lifecycleService.enterLiveFromSnapshot(state, ctx, setOffsetFromCurrentContext);
+        lifecycleService.enterLiveFromSnapshot(state);
         marketStatePublisher.publishSnapshotIfLive(state, null, null);
     }
 

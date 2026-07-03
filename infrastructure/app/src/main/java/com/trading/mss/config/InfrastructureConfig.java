@@ -196,6 +196,7 @@ public class InfrastructureConfig {
             AsyncSnapshotPort asyncSnapshotPort,
             SymbolStateLifecycleService symbolStateLifecycleService,
             MarketStatePublisher marketStatePublisher,
+            StripedSerialExecutor symbolExecutor,
             Clock clock,
             @Value("${app.binance.snapshot.depth-limit:1000}") int snapshotDepthLimit,
             @Value("${app.state.bootstrap-cooldown-ms:5000}") long bootstrapCooldownMs) {
@@ -206,6 +207,7 @@ public class InfrastructureConfig {
                 symbolStateStore,
                 symbolStateLifecycleService,
                 marketStatePublisher,
+                symbolExecutor,
                 snapshotDepthLimit,
                 clock,
                 bootstrapCooldownMs);
@@ -226,7 +228,7 @@ public class InfrastructureConfig {
             SymbolStateLifecycleService symbolStateLifecycleService,
             SymbolStateStorePort symbolStateStore) {
         BootstrapPhaseStateHandler bootstrapPhaseHandler =
-                new BootstrapPhaseStateHandler(depthDiffBufferService, depthDiffBootstrapService, symbolStateStore);
+                new BootstrapPhaseStateHandler(depthDiffBufferService, symbolStateStore);
 
         DepthDiffStateHandlerRegistry registry = new DepthDiffStateHandlerRegistry(java.util.List.of(
                 new InitDepthDiffStateHandler(depthDiffBufferService, depthDiffBootstrapService),

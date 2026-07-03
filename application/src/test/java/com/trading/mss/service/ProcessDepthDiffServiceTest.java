@@ -17,6 +17,7 @@ import com.trading.mss.dto.orderbook.OrderBookStatusDto;
 import com.trading.mss.mapper.OrderBookL2SnapshotMapper;
 import com.trading.mss.mapper.OrderBookStatusMapper;
 import com.trading.mss.port.output.AsyncSnapshotPort;
+import com.trading.mss.port.output.SymbolExecutorPort;
 import com.trading.mss.port.output.PublishOrderBookL2SnapshotPort;
 import com.trading.mss.port.output.PublishOrderBookStatusPort;
 import com.trading.mss.port.output.SymbolStateStorePort;
@@ -57,6 +58,7 @@ class ProcessDepthDiffServiceTest {
     private RecordingSnapshotPublisher snapshotPublisher;
     private RecordingStatusPublisher statusPublisher;
     private MutableClock clock;
+    private TrampolineSymbolExecutor symbolExecutor;
     private DepthDiffService service;
 
     @BeforeEach
@@ -66,6 +68,7 @@ class ProcessDepthDiffServiceTest {
         snapshotPublisher = new RecordingSnapshotPublisher();
         statusPublisher = new RecordingStatusPublisher();
         clock = new MutableClock(1_700_000_000_000L);
+        symbolExecutor = new TrampolineSymbolExecutor();
         service = createService(MAX_BUFFERED_EVENTS);
     }
 
@@ -94,6 +97,7 @@ class ProcessDepthDiffServiceTest {
                 stateStore,
                 lifecycleService,
                 marketStatePublisher,
+                symbolExecutor,
                 SNAPSHOT_DEPTH_LIMIT,
                 clock,
                 BOOTSTRAP_COOLDOWN_MS
@@ -101,7 +105,7 @@ class ProcessDepthDiffServiceTest {
         DepthDiffBufferService bufferService = new DepthDiffBufferService(lifecycleService, maxBufferedEvents);
 
         BootstrapPhaseStateHandler bootstrapPhaseHandler =
-                new BootstrapPhaseStateHandler(bufferService, depthDiffBootstrapService, stateStore);
+                new BootstrapPhaseStateHandler(bufferService, stateStore);
 
         DepthDiffStateHandlerRegistry registry = new DepthDiffStateHandlerRegistry(List.of(
                 new InitDepthDiffStateHandler(bufferService, depthDiffBootstrapService),
@@ -471,7 +475,7 @@ class ProcessDepthDiffServiceTest {
     class AsyncBootstrap {
 
         @Test
-        void snapshotLoadsAsync_appliedOnLaterEvent_notWhileInFlight() {
+        void snapshotAppliedImmediatelyOnCompletion_withoutFurtherEvents() {
             snapshotPort.setManualCompletion(true);
             snapshotPort.setSnapshot(snapshot(100,
                     List.of(new PriceLevelDto("50000.00", "1.0")),
@@ -488,18 +492,18 @@ class ProcessDepthDiffServiceTest {
                     stateStore.loadOrCreate(KEY).getStatus());
             assertEquals(1, snapshotPort.getLoadCalls());
 
+            // Completing the fetch drives the state machine on its own — no further diff needed.
             snapshotPort.completePending();
-            service.process(event(111, 115, List.of(), List.of()), ctx(3));
 
             SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.LIVE, after.getStatus());
             assertTrue(after.isTrusted());
-            assertEquals(115, after.getLocalUpdateId());
+            assertEquals(110, after.getLocalUpdateId());
             assertEquals(100, after.getLastSnapshotUpdateId());
         }
 
         @Test
-        void asyncFetchFailure_goesResyncing() {
+        void asyncFetchFailure_goesResyncingWithoutFurtherEvents() {
             snapshotPort.setManualCompletion(true);
             snapshotPort.setException(new RuntimeException("connection reset"));
 
@@ -508,11 +512,53 @@ class ProcessDepthDiffServiceTest {
                     stateStore.loadOrCreate(KEY).getStatus());
 
             snapshotPort.completePending();
-            service.process(event(111, 120, List.of(), List.of()), ctx(2));
 
             SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.RESYNCING, after.getStatus());
             assertFalse(after.isTrusted());
+            assertLastStatusReason(OrderBookReason.SNAPSHOT_LOAD_FAILED);
+        }
+
+        @Test
+        void staleCallbackFromSupersededFetch_isDiscardedByEpochGuard() {
+            service = createService(1); // buffer capacity 1 to force overflow
+            snapshotPort.setManualCompletion(true);
+            snapshotPort.setSnapshot(snapshot(100,
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
+
+            // Fetch A submitted; buffer holds one event.
+            service.process(event(98, 105, List.of(), List.of()), ctx(1));
+            assertEquals(1, snapshotPort.getLoadCalls());
+
+            // Overflow while SNAPSHOT_LOADING -> RESYNCING (fetch A still in flight).
+            service.process(event(106, 110, List.of(), List.of()), ctx(2));
+            assertEquals(SymbolStateStatus.RESYNCING, stateStore.loadOrCreate(KEY).getStatus());
+            assertLastStatusReason(OrderBookReason.BUFFER_OVERFLOW);
+
+            // Next event restarts bootstrap after the cooldown -> fetch B.
+            clock.advance(BOOTSTRAP_COOLDOWN_MS + 1);
+            snapshotPort.setSnapshot(snapshot(300,
+                    List.of(new PriceLevelDto("51000.00", "1.0")),
+                    List.of(new PriceLevelDto("51001.00", "1.0"))));
+            service.process(event(298, 310, List.of(), List.of()), ctx(3));
+            assertEquals(2, snapshotPort.getLoadCalls());
+            assertEquals(SymbolStateStatus.SNAPSHOT_LOADING, stateStore.loadOrCreate(KEY).getStatus());
+
+            // Fetch A completes late: must be discarded, state stays SNAPSHOT_LOADING on fetch B.
+            snapshotPort.completeOldest();
+            SymbolState afterStale = stateStore.loadOrCreate(KEY);
+            assertEquals(SymbolStateStatus.SNAPSHOT_LOADING, afterStale.getStatus());
+            assertTrue(afterStale.getOrderBook().getBids().isEmpty(),
+                    "stale snapshot must not touch the book");
+
+            // Fetch B completes: normal bootstrap to LIVE.
+            snapshotPort.completeOldest();
+            SymbolState after = stateStore.loadOrCreate(KEY);
+            assertEquals(SymbolStateStatus.LIVE, after.getStatus());
+            assertTrue(after.isTrusted());
+            assertEquals(310, after.getLocalUpdateId());
+            assertEquals(300, after.getLastSnapshotUpdateId());
         }
     }
 
@@ -767,6 +813,43 @@ class ProcessDepthDiffServiceTest {
         }
     }
 
+    /**
+     * Deterministic serialized executor: commands are queued and drained to exhaustion on the
+     * calling thread, but never run reentrantly inside the submitting command — mirroring the
+     * production dispatcher's ordering semantics (unlike a naive {@code Runnable::run}).
+     */
+    static class TrampolineSymbolExecutor implements SymbolExecutorPort {
+        private final java.util.ArrayDeque<Runnable> queue = new java.util.ArrayDeque<>();
+        private boolean draining = false;
+
+        @Override
+        public java.util.concurrent.Executor executorFor(SymbolKey key) {
+            return this::submit;
+        }
+
+        @Override
+        public boolean tryExecute(SymbolKey key, Runnable task) {
+            submit(task);
+            return true;
+        }
+
+        private void submit(Runnable task) {
+            queue.addLast(task);
+            if (draining) {
+                return;
+            }
+            draining = true;
+            try {
+                Runnable next;
+                while ((next = queue.pollFirst()) != null) {
+                    next.run();
+                }
+            } finally {
+                draining = false;
+            }
+        }
+    }
+
     static class StubSymbolStateStore implements SymbolStateStorePort {
         private final ConcurrentMap<String, SymbolState> states = new ConcurrentHashMap<>();
 
@@ -813,13 +896,22 @@ class ProcessDepthDiffServiceTest {
 
         void completePending() {
             for (CompletableFuture<OrderBookSnapshot> future : pending) {
-                if (exception != null) {
-                    future.completeExceptionally(exception);
-                } else {
-                    future.complete(snapshot);
-                }
+                complete(future);
             }
             pending.clear();
+        }
+
+        /** Completes only the earliest still-pending fetch (for superseded-fetch scenarios). */
+        void completeOldest() {
+            complete(pending.removeFirst());
+        }
+
+        private void complete(CompletableFuture<OrderBookSnapshot> future) {
+            if (exception != null) {
+                future.completeExceptionally(exception);
+            } else {
+                future.complete(snapshot);
+            }
         }
 
         @Override

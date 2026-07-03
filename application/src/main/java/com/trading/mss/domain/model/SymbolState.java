@@ -7,7 +7,6 @@ import lombok.Setter;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.concurrent.CompletableFuture;
 
 @Getter
 @Setter
@@ -33,13 +32,17 @@ public class SymbolState {
     private long lastSnapshotUpdateId = -1;
     private boolean bootstrapInProgress = false;
     private long lastBootstrapAttemptTs = 0;
-    private transient CompletableFuture<OrderBookSnapshot> pendingSnapshot;
     private long lastEventExchangeTs;
     private long lastEventReceivedTs;
     private long lastEventProcessedTs;
 
     // Monotonic per-instrument sequence assigned to each published OrderBookL2SnapshotEvent.
     private long stateSeq = 0;
+
+    // Incremented on every snapshot-fetch submission and on every bootstrap reset; a snapshot
+    // callback carrying an older epoch is stale (superseded fetch) and must be discarded.
+    // Plain long on purpose: only ever touched from this symbol's serialized commands.
+    private long bootstrapEpoch = 0;
 
     // Diagnostic counters surfaced in version/quality/status events.
     private long gapCount = 0;
@@ -77,6 +80,10 @@ public class SymbolState {
 
     public long nextStateSeq() {
         return ++stateSeq;
+    }
+
+    public long incrementBootstrapEpoch() {
+        return ++bootstrapEpoch;
     }
 
     public void incrementGapCount() {
