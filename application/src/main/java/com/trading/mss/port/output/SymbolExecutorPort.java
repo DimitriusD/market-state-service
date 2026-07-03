@@ -1,15 +1,16 @@
 package com.trading.mss.port.output;
 
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 
 import java.util.concurrent.Executor;
 
 /**
- * Serialized command execution per symbol.
+ * Serialized command execution per instrument.
  *
  * <p>All mutation and logic-reads of a {@code SymbolState} MUST happen inside commands submitted
- * through this port for that symbol's key. Commands for the same key run strictly sequentially in
- * submission order; commands for different keys may run concurrently.
+ * through this port for that instrument's key. Commands for the same
+ * {@link InstrumentKey#canonical()} (= {@code instrumentId}) run strictly sequentially in
+ * submission order; commands for different instruments may run concurrently.
  */
 public interface SymbolExecutorPort {
 
@@ -19,12 +20,12 @@ public interface SymbolExecutorPort {
      * a symbol command of the same stripe's worker (the implementation must handle self-submission
      * without deadlock).
      */
-    Executor executorFor(SymbolKey key);
+    Executor executorFor(InstrumentKey key);
 
     /**
      * Non-blocking submission for droppable commands (watchdog ticks).
      *
      * @return {@code false} if the command was rejected (queue full or dispatcher stopped)
      */
-    boolean tryExecute(SymbolKey key, Runnable task);
+    boolean tryExecute(InstrumentKey key, Runnable task);
 }

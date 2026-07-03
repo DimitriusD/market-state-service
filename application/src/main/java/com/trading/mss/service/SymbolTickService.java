@@ -1,7 +1,7 @@
 package com.trading.mss.service;
 
 import com.trading.mss.domain.model.OrderBookReason;
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.port.output.SymbolStateStorePort;
@@ -39,7 +39,7 @@ public class SymbolTickService {
     private final long softStalenessMs;
     private final long hardStalenessMs;
 
-    public void onTick(SymbolKey key) {
+    public void onTick(InstrumentKey key) {
         SymbolState state = stateStore.loadOrCreate(key);
         long now = clock.millis();
         switch (state.getStatus()) {

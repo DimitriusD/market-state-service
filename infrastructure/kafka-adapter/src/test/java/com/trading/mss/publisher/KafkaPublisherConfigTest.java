@@ -30,26 +30,28 @@ class KafkaPublisherConfigTest {
 
     private static final String DEFAULT_SNAPSHOT_TOPIC = "market.state.orderbook.l2.snapshot.v1";
     private static final String DEFAULT_STATUS_TOPIC = "market.state.orderbook.status.v1";
+    private static final String INSTRUMENT_ID = "BINANCE|SPOT|BTC|USDT";
 
     @Test
     void snapshotPublisher_sendsToConfiguredTopicKeyedByInstrumentId() {
         RecordingKafkaTemplate<OrderBookL2SnapshotEvent> template = new RecordingKafkaTemplate<>();
         var publisher = new KafkaOrderBookL2SnapshotPublisher(template, DEFAULT_SNAPSHOT_TOPIC);
 
-        publisher.publish(snapshotDto("BTCUSDT"));
+        publisher.publish(snapshotDto(INSTRUMENT_ID));
 
         assertEquals(DEFAULT_SNAPSHOT_TOPIC, template.topic);
-        assertEquals("BTCUSDT", template.key);
+        assertEquals(INSTRUMENT_ID, template.key);
     }
 
     @Test
-    void snapshotPublisher_fallsBackToSymbolWhenInstrumentIdBlank() {
+    void snapshotPublisher_skipsWhenInstrumentIdBlank() {
         RecordingKafkaTemplate<OrderBookL2SnapshotEvent> template = new RecordingKafkaTemplate<>();
         var publisher = new KafkaOrderBookL2SnapshotPublisher(template, DEFAULT_SNAPSHOT_TOPIC);
 
         publisher.publish(snapshotDto(""));
 
-        assertEquals("BTCUSDT", template.key, "blank instrumentId should fall back to symbol");
+        assertNull(template.topic, "blank instrumentId must skip the publish, never fall back to symbol");
+        assertNull(template.key);
     }
 
     @Test
@@ -57,10 +59,21 @@ class KafkaPublisherConfigTest {
         RecordingKafkaTemplate<OrderBookStatusEvent> template = new RecordingKafkaTemplate<>();
         var publisher = new KafkaOrderBookStatusPublisher(template, DEFAULT_STATUS_TOPIC);
 
-        publisher.publish(statusDto());
+        publisher.publish(statusDto(INSTRUMENT_ID));
 
         assertEquals(DEFAULT_STATUS_TOPIC, template.topic);
-        assertEquals("BTCUSDT", template.key);
+        assertEquals(INSTRUMENT_ID, template.key);
+    }
+
+    @Test
+    void statusPublisher_skipsWhenInstrumentIdBlank() {
+        RecordingKafkaTemplate<OrderBookStatusEvent> template = new RecordingKafkaTemplate<>();
+        var publisher = new KafkaOrderBookStatusPublisher(template, DEFAULT_STATUS_TOPIC);
+
+        publisher.publish(statusDto(""));
+
+        assertNull(template.topic, "blank instrumentId must skip the publish, never fall back to symbol");
+        assertNull(template.key);
     }
 
     private static OrderBookL2SnapshotDto snapshotDto(String instrumentId) {
@@ -79,11 +92,11 @@ class KafkaPublisherConfigTest {
                 new OrderBookSourceDto("canonical.market.depthdiff.v1", "BTCUSDT", 0, 1, "evt-1", 104L, 105L));
     }
 
-    private static OrderBookStatusDto statusDto() {
+    private static OrderBookStatusDto statusDto(String instrumentId) {
         OrderBookStatusDetailsDto details = new OrderBookStatusDetailsDto(
                 105, null, 100, null, null, null, 0, null, null, null, null, -1, -1, -1, 0, 1, 0, 1);
         return new OrderBookStatusDto(
-                metadata("ORDERBOOK_STATUS", "BTCUSDT"),
+                metadata("ORDERBOOK_STATUS", instrumentId),
                 SymbolStateStatus.RESYNCING, BookSyncStatus.OUT_OF_SYNC, false,
                 OrderBookReason.GAP_DETECTED, details, "gap");
     }

@@ -36,12 +36,13 @@ public final class StateMetadataFactory {
                 processedTs);
     }
 
-    /** Instrument id safe for use inside an eventId: non-alphanumeric chars collapsed to '-'. */
+    /**
+     * Instrument id safe for use inside an eventId: non-alphanumeric chars collapsed to '-'.
+     * instrumentId is set at state creation and required non-blank, so the "unknown" branch is
+     * defensive only — there is deliberately no fallback to symbol.
+     */
     public static String safeInstrumentId(SymbolState state) {
         String raw = state.getInstrumentId();
-        if (raw == null || raw.isBlank()) {
-            raw = state.getSymbol();
-        }
         if (raw == null || raw.isBlank()) {
             return "unknown";
         }

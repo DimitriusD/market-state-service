@@ -1,6 +1,6 @@
 package com.trading.mss.watchdog;
 
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.port.output.SymbolExecutorPort;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import com.trading.mss.service.SymbolTickService;
@@ -29,7 +29,7 @@ public class SymbolStateWatchdog {
 
     @Scheduled(fixedDelayString = "${app.state.watchdog.interval-ms:1000}")
     public void tick() {
-        for (SymbolKey key : stateStore.keys()) {
+        for (InstrumentKey key : stateStore.keys()) {
             boolean accepted = symbolExecutor.tryExecute(key, () -> tickService.onTick(key));
             if (!accepted) {
                 long total = droppedTicks.incrementAndGet();

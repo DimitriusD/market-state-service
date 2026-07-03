@@ -3,7 +3,7 @@ package com.trading.mss.mapper;
 import com.trading.common.enums.BookSyncStatus;
 import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.ScaledDecimal;
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.KafkaMessageContext;
@@ -162,12 +162,11 @@ class OrderBookL2SnapshotMapperTest {
     }
 
     private static SymbolState liveState() {
-        SymbolState state = new SymbolState(new SymbolKey("binance", "spot", "BTCUSDT"));
+        SymbolState state = new SymbolState(new InstrumentKey("BINANCE|SPOT|BTC|USDT", "binance", "spot", "BTCUSDT"));
         state.setStatus(SymbolStateStatus.LIVE);
         state.setTrusted(true);
         state.setBase("BTC");
         state.setQuote("USDT");
-        state.setInstrumentId("BTCUSDT");
         state.setLocalUpdateId(105);
         state.setLastSnapshotUpdateId(100);
         state.setLastEventExchangeTs(NOW - 50);

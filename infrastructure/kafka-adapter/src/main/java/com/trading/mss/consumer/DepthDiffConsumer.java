@@ -1,7 +1,7 @@
 package com.trading.mss.consumer;
 
 import com.trading.contracts.market.DepthDiffEvent;
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.mapper.DepthDiffAvroMapper;
 import com.trading.mss.dto.KafkaMessageContext;
 import com.trading.mss.port.input.DepthDiffProcessor;
@@ -31,22 +31,45 @@ public class DepthDiffConsumer {
             containerFactory = "depthDiffListenerContainerFactory"
     )
     public void consume(ConsumerRecord<String, DepthDiffEvent> record) {
-        DepthDiffEvent value = record.value();
-        if (value == null || value.getMetadata() == null
-                || isBlank(value.getMetadata().getExchange()) || isBlank(value.getMetadata().getSymbol())) {
-            log.warn("Skipping invalid depth diff record: topic={} partition={} offset={} key={} value={}",
-                    record.topic(), record.partition(), record.offset(), record.key(),
-                    value == null ? "null" : "metadata missing/blank");
+        String invalidReason = validate(record.value());
+        if (invalidReason != null) {
+            log.warn("Skipping invalid depth diff record: topic={} partition={} offset={} key={} reason={}",
+                    record.topic(), record.partition(), record.offset(), record.key(), invalidReason);
             return;
         }
 
         var context = new KafkaMessageContext(record.topic(), record.key(), record.partition(), record.offset());
-        var dto = DepthDiffAvroMapper.toDto(value);
-        SymbolKey key = SymbolKey.of(dto.metadataDto());
+        var dto = DepthDiffAvroMapper.toDto(record.value());
+        // Identity comes from metadata.instrumentId — the Kafka record key is diagnostics only.
+        InstrumentKey key = InstrumentKey.of(dto.metadataDto());
         symbolExecutor.executorFor(key).execute(() -> processDepthDiff.process(dto, context));
     }
 
+    /** Returns null when valid, otherwise the reason the record must be skipped. */
+    private static String validate(DepthDiffEvent value) {
+        if (value == null) {
+            return "null value (tombstone)";
+        }
+        var metadata = value.getMetadata();
+        if (metadata == null) {
+            return "metadata missing";
+        }
+        if (isBlank(metadata.getInstrumentId())) {
+            return "blank instrumentId";
+        }
+        if (isBlank(metadata.getExchange())) {
+            return "blank exchange";
+        }
+        if (isBlank(metadata.getMarketType())) {
+            return "blank marketType";
+        }
+        if (isBlank(metadata.getSymbol())) {
+            return "blank symbol";
+        }
+        return null;
+    }
+
     private static boolean isBlank(CharSequence s) {
-        return s == null || s.isEmpty();
+        return s == null || s.toString().isBlank();
     }
 }

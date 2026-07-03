@@ -1,6 +1,6 @@
 package com.trading.mss.store;
 
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.port.output.SymbolStateStorePort;
 
@@ -13,7 +13,7 @@ public class InMemorySymbolStateStore implements SymbolStateStorePort {
     private final ConcurrentMap<String, SymbolState> states = new ConcurrentHashMap<>();
 
     @Override
-    public SymbolState loadOrCreate(SymbolKey key) {
+    public SymbolState loadOrCreate(InstrumentKey key) {
         return states.computeIfAbsent(key.canonical(), k -> new SymbolState(key));
     }
 
@@ -23,7 +23,7 @@ public class InMemorySymbolStateStore implements SymbolStateStorePort {
     }
 
     @Override
-    public Collection<SymbolKey> keys() {
+    public Collection<InstrumentKey> keys() {
         return states.values().stream().map(SymbolState::key).toList();
     }
 }

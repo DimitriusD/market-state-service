@@ -1,6 +1,6 @@
 package com.trading.mss.dispatch;
 
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.port.output.SymbolExecutorPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.SmartLifecycle;
@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Serialized per-symbol command execution over N stripes.
  *
  * <p>Each stripe owns one worker thread draining a bounded queue; a symbol is pinned to a stripe by
- * the hash of its {@link SymbolKey#canonical()} form, so all commands of one symbol run strictly
+ * the hash of its {@link InstrumentKey#canonical()} form, so all commands of one symbol run strictly
  * sequentially. {@code execute} blocks when the stripe queue is full (backpressure on the Kafka
  * listener); {@code tryExecute} drops instead (watchdog ticks are idempotent).
  *
@@ -59,13 +59,13 @@ public class StripedSerialExecutor implements SymbolExecutorPort, SmartLifecycle
     }
 
     @Override
-    public Executor executorFor(SymbolKey key) {
+    public Executor executorFor(InstrumentKey key) {
         Stripe stripe = stripeFor(key);
         return task -> submitBlocking(stripe, key, task);
     }
 
     @Override
-    public boolean tryExecute(SymbolKey key, Runnable task) {
+    public boolean tryExecute(InstrumentKey key, Runnable task) {
         Stripe stripe = stripeFor(key);
         if (!accepting) {
             dropAfterClose(key);
@@ -78,7 +78,7 @@ public class StripedSerialExecutor implements SymbolExecutorPort, SmartLifecycle
         return stripe.queue.offer(task);
     }
 
-    private void submitBlocking(Stripe stripe, SymbolKey key, Runnable task) {
+    private void submitBlocking(Stripe stripe, InstrumentKey key, Runnable task) {
         if (!accepting) {
             dropAfterClose(key);
             return;
@@ -106,13 +106,13 @@ public class StripedSerialExecutor implements SymbolExecutorPort, SmartLifecycle
         }
     }
 
-    private void dropAfterClose(SymbolKey key) {
+    private void dropAfterClose(InstrumentKey key) {
         droppedAfterClose.incrementAndGet();
         log.warn("Dropping symbol command: dispatcher closed. key={} droppedAfterClose={}",
                 key.canonical(), droppedAfterClose.get());
     }
 
-    private Stripe stripeFor(SymbolKey key) {
+    private Stripe stripeFor(InstrumentKey key) {
         return stripes[Math.floorMod(key.canonical().hashCode(), stripes.length)];
     }
 

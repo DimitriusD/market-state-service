@@ -5,7 +5,7 @@ import com.trading.mss.domain.model.BufferedDepthDiff;
 import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.ScaledDecimal;
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.KafkaMessageContext;
@@ -54,7 +54,12 @@ class DepthDiffServiceTest {
     private static final long HARD_STALE_MS = 120_000;
 
     private static final String INPUT_TOPIC = "canonical.market.depthdiff.v1";
-    private static final SymbolKey KEY = new SymbolKey("binance", "spot", "BTCUSDT");
+    private static final String INSTRUMENT_ID = "BINANCE|SPOT|BTC|USDT";
+    private static final String EXCHANGE = "binance";
+    private static final String MARKET_TYPE = "spot";
+    private static final String SYMBOL = "BTCUSDT";
+    private static final InstrumentKey KEY =
+            new InstrumentKey(INSTRUMENT_ID, EXCHANGE, MARKET_TYPE, SYMBOL);
 
     private StubSymbolStateStore stateStore;
     private StubAsyncSnapshotPort snapshotPort;
@@ -762,13 +767,59 @@ class DepthDiffServiceTest {
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             OrderBookL2SnapshotDto snap = snapshotPublisher.published.getFirst();
-            assertEquals("BTCUSDT", snap.metadata().symbol());
-            assertEquals("binance", snap.metadata().exchange());
-            assertEquals("spot", snap.metadata().marketType());
-            assertEquals("BTCUSDT", snap.metadata().instrumentId());
+            assertEquals(SYMBOL, snap.metadata().symbol());
+            assertEquals(EXCHANGE, snap.metadata().exchange());
+            assertEquals(MARKET_TYPE, snap.metadata().marketType());
+            assertEquals(INSTRUMENT_ID, snap.metadata().instrumentId());
             assertEquals("BTC", snap.metadata().base());
             assertEquals("USDT", snap.metadata().quote());
             assertEquals("ORDERBOOK_L2_SNAPSHOT", snap.metadata().eventType());
+        }
+    }
+
+    @Nested
+    class InstrumentIdentity {
+
+        @Test
+        void sameSymbolDifferentInstrumentIds_createSeparateStates() {
+            String futuresInstrumentId = "BINANCE|FUTURES|BTC|USDT";
+            InstrumentKey futuresKey = new InstrumentKey(futuresInstrumentId, EXCHANGE, "futures", SYMBOL);
+
+            snapshotPort.setSnapshot(snapshot(100,
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
+            service.process(event(98, 105, List.of(), List.of()), ctx(1));
+
+            snapshotPort.setSnapshot(snapshot(200,
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
+            service.process(eventFor(futuresInstrumentId, "futures", 198, 205, List.of(), List.of()),
+                    new KafkaMessageContext(INPUT_TOPIC, futuresInstrumentId, 0, 2));
+
+            SymbolState spot = stateStore.loadOrCreate(KEY);
+            SymbolState futures = stateStore.loadOrCreate(futuresKey);
+
+            assertNotSame(spot, futures, "same symbol, different instrumentId must not share state");
+            assertEquals(INSTRUMENT_ID, spot.getInstrumentId());
+            assertEquals(futuresInstrumentId, futures.getInstrumentId());
+            assertEquals(105, spot.getLocalUpdateId());
+            assertEquals(205, futures.getLocalUpdateId());
+        }
+
+        @Test
+        void identityMismatch_eventSkipped() {
+            snapshotPort.setSnapshot(snapshot(100,
+                    List.of(new PriceLevelDto("50000.00", "1.0")),
+                    List.of(new PriceLevelDto("50001.00", "1.0"))));
+            service.process(event(98, 105, List.of(), List.of()), ctx(1));
+            SymbolState state = stateStore.loadOrCreate(KEY);
+            long updateIdBefore = state.getLocalUpdateId();
+
+            // Same instrumentId but different marketType: identity mismatch, must be skipped.
+            service.process(eventFor(INSTRUMENT_ID, "futures", 106, 110, List.of(), List.of()), ctx(2));
+
+            assertEquals(updateIdBefore, stateStore.loadOrCreate(KEY).getLocalUpdateId());
+            assertEquals(SymbolStateStatus.LIVE, stateStore.loadOrCreate(KEY).getStatus());
         }
     }
 
@@ -925,9 +976,15 @@ class DepthDiffServiceTest {
 
     private static DepthDiffDto event(long firstUpdateId, long finalUpdateId,
                                       List<PriceLevelDto> bids, List<PriceLevelDto> asks) {
+        return eventFor(INSTRUMENT_ID, MARKET_TYPE, firstUpdateId, finalUpdateId, bids, asks);
+    }
+
+    private static DepthDiffDto eventFor(String instrumentId, String marketType,
+                                         long firstUpdateId, long finalUpdateId,
+                                         List<PriceLevelDto> bids, List<PriceLevelDto> asks) {
         long now = System.currentTimeMillis();
-        var metadata = new MetadataDto(1, "depthDiff", "binance", "spot",
-                "BTC", "USDT", "BTCUSDT", "BTCUSDT", "evt-1", "stream-1",
+        var metadata = new MetadataDto(1, "depthDiff", EXCHANGE, marketType,
+                "BTC", "USDT", SYMBOL, instrumentId, "evt-1", "stream-1",
                 now, now, now);
         return new DepthDiffDto(metadata, now, firstUpdateId, finalUpdateId, null, bids, asks);
     }
@@ -940,7 +997,7 @@ class DepthDiffServiceTest {
     }
 
     private static KafkaMessageContext ctx(long offset) {
-        return new KafkaMessageContext(INPUT_TOPIC, "BTCUSDT", 0, offset);
+        return new KafkaMessageContext(INPUT_TOPIC, INSTRUMENT_ID, 0, offset);
     }
 
     static final class MutableClock extends Clock {
@@ -985,12 +1042,12 @@ class DepthDiffServiceTest {
         private boolean draining = false;
 
         @Override
-        public java.util.concurrent.Executor executorFor(SymbolKey key) {
+        public java.util.concurrent.Executor executorFor(InstrumentKey key) {
             return this::submit;
         }
 
         @Override
-        public boolean tryExecute(SymbolKey key, Runnable task) {
+        public boolean tryExecute(InstrumentKey key, Runnable task) {
             submit(task);
             return true;
         }
@@ -1016,7 +1073,7 @@ class DepthDiffServiceTest {
         private final ConcurrentMap<String, SymbolState> states = new ConcurrentHashMap<>();
 
         @Override
-        public SymbolState loadOrCreate(SymbolKey key) {
+        public SymbolState loadOrCreate(InstrumentKey key) {
             return states.computeIfAbsent(key.canonical(), k -> new SymbolState(key));
         }
 
@@ -1026,7 +1083,7 @@ class DepthDiffServiceTest {
         }
 
         @Override
-        public java.util.Collection<SymbolKey> keys() {
+        public java.util.Collection<InstrumentKey> keys() {
             return states.values().stream().map(SymbolState::key).toList();
         }
     }

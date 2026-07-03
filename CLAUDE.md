@@ -60,21 +60,25 @@ The `application` module classes are **not** Spring components — they have no 
 
 The adapter modules *do* use `@Configuration`/`@Bean` classes (e.g. `KafkaConsumerConfig`, `KafkaProducerConfig`) — these are picked up by component scan because `Application` lives at `com.trading.mss` and every module shares that base package.
 
+### Identity model
+
+The primary MSS identity is the canonical **`instrumentId`** (e.g. `BINANCE|SPOT|BTC|USDT`), carried by [InstrumentKey](application/src/main/java/com/trading/mss/domain/model/InstrumentKey.java): `canonical()` = `instrumentId`, used for the state-store map key, dispatcher stripe hashing, and the Kafka key of every published snapshot/status event. `exchange`/`marketType`/`symbol` are **routing attributes, not identity** — the native symbol (`BTCUSDT`) drives the Binance REST snapshot API and sync-policy selection, and all three appear in metadata/logs, but never in map keys or stripe hashes. **There is no fallback identity mode**: an event with a blank `instrumentId` (or blank routing attributes) is invalid — the consumer skips it and publishers refuse to publish under a symbol key. `instrumentId` comes from the upstream canonical event; MSS never reconstructs it. `SymbolState`'s identity fields (`instrumentId`, `venue`, `marketType`, `symbol`) are immutable, set at creation from the `InstrumentKey`.
+
 ### Command dispatch model — the serialization invariant
 
-All `SymbolState` mutation happens inside **serialized per-symbol commands** submitted through `SymbolExecutorPort`, implemented by [StripedSerialExecutor](infrastructure/app/src/main/java/com/trading/mss/dispatch/StripedSerialExecutor.java) (N stripes, default 1 = a global event loop; a symbol is pinned to a stripe by `SymbolKey.canonical()` hash). Three command sources:
+All `SymbolState` mutation happens inside **serialized per-instrument commands** submitted through `SymbolExecutorPort`, implemented by [StripedSerialExecutor](infrastructure/app/src/main/java/com/trading/mss/dispatch/StripedSerialExecutor.java) (N stripes, default 1 = a global event loop; an instrument is pinned to a stripe by `InstrumentKey.canonical()` = `instrumentId` hash). Three command sources:
 
 1. **Kafka**: `DepthDiffConsumer` validates, deserializes and enqueues `processor.process(dto, ctx)` — blocking `put` (backpressure). Offsets commit after enqueue, not after processing; acceptable because state is in-memory and rebuilt via bootstrap after restart.
 2. **Snapshot callbacks**: `DepthDiffBootstrapService.startBootstrapIfNeeded` attaches `whenCompleteAsync(..., executorFor(key))` — the fetch result is applied the moment it arrives (`onSnapshotReady`), guarded by `bootstrapEpoch` + `SNAPSHOT_LOADING` against superseded fetches. There is no polling.
 3. **Watchdog ticks**: `SymbolStateWatchdog` (`@Scheduled`, 1s) submits `SymbolTickService.onTick(key)` via non-blocking `tryExecute` (droppable). Ticks restart bootstrap after the cooldown (even with an empty buffer), time out lost snapshot fetches, and enforce two-tier staleness: soft (status event, `trusted` unchanged) then hard (full resync — a dead stream degrades into controlled REST polling).
 
-Rules that follow: never touch a `SymbolState` outside its command (the store's `keys()` deliberately returns only immutable `SymbolKey`s); never pass a `SymbolState` reference across an async boundary — pass the `SymbolKey` and re-resolve inside the command; when a command running on a stripe submits a follow-up to the same stripe, the executor routes it through a local deque (never blocks on its own queue). The dispatcher is a `SmartLifecycle` at phase 0 so Kafka containers stop first and accepted commands drain on shutdown.
+Rules that follow: never touch a `SymbolState` outside its command (the store's `keys()` deliberately returns only immutable `InstrumentKey`s); never pass a `SymbolState` reference across an async boundary — pass the `InstrumentKey` and re-resolve inside the command; when a command running on a stripe submits a follow-up to the same stripe, the executor routes it through a local deque (never blocks on its own queue). The dispatcher is a `SmartLifecycle` at phase 0 so Kafka containers stop first and accepted commands drain on shutdown.
 
 ### Core flow: per-symbol state machine via handler registry
 
 The central use case is `DepthDiffProcessor.process(DepthDiffDto, KafkaMessageContext)`, implemented by [DepthDiffService](application/src/main/java/com/trading/mss/service/DepthDiffService.java). It:
 
-1. loads/creates the `SymbolState` for the event's `SymbolKey` (exchange, marketType, symbol),
+1. loads/creates the `SymbolState` for the event's `InstrumentKey` (identity = `instrumentId`; skips the event on an identity/routing mismatch),
 2. dispatches to a `DepthDiffStateHandler` chosen by the current `SymbolStateStatus`.
 
 `DepthDiffStateHandlerRegistry` is an `EnumMap<SymbolStateStatus, DepthDiffStateHandler>`. Status → handler mapping:
@@ -89,7 +93,7 @@ The bootstrap/live/resync algorithms (snapshot staleness check, bridging-event c
 
 ### Conventions that matter for correctness
 
-- **Per-symbol sequential processing is required.** Sequence checks (`U`, `u`, `localUpdateId`) are only valid if one symbol is never mutated concurrently. The dispatcher (see above) is the enforcement mechanism; the input topic must still be keyed by symbol so enqueue order matches offset order. A full stripe queue blocks the Kafka listener — watch `mss.dispatcher.enqueue.blocked.time`; a sustained block risks `max.poll.interval.ms` (consumer pause/resume is a known future refinement).
+- **Per-instrument sequential processing is required.** Sequence checks (`U`, `u`, `localUpdateId`) are only valid if one instrument is never mutated concurrently. The dispatcher (see above) is the enforcement mechanism; the input topic must still be keyed by `instrumentId` so enqueue order matches offset order. A full stripe queue blocks the Kafka listener — watch `mss.dispatcher.enqueue.blocked.time`; a sustained block risks `max.poll.interval.ms` (consumer pause/resume is a known future refinement).
 - **Prices and quantities are scaled `long`s, not `BigDecimal`/`double`.** [ScaledDecimal](application/src/main/java/com/trading/mss/domain/model/ScaledDecimal.java) converts to/from strings using a fixed scale of `1e8` (8 digits). The `OrderBook` stores `NavigableMap<Long, Long>` (bids descending, asks ascending). Use `ScaledDecimal.parse`/`format` at the boundaries; keep the book in scaled longs.
 - **State is in-memory only** (`InMemorySymbolStateStore`). On restart, state is rebuilt from snapshot + buffered diffs — there is no persistence layer.
 - **DTOs are Java records**; Avro ↔ DTO mappers in the kafka-adapter are static utility classes (e.g. `DepthDiffAvroMapper.toDto`). The domain never touches Avro types directly.

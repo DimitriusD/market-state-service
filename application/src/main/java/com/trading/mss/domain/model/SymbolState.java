@@ -12,19 +12,21 @@ import java.util.Deque;
 @Setter
 public class SymbolState {
 
+    // Immutable identity: instrumentId is the primary MSS identity (state-store key, stripe hash,
+    // output Kafka key); venue/marketType/symbol are routing attributes fixed at creation.
+    private final String instrumentId;
     private final String symbol;
     private final String venue;
+    private final String marketType;
 
     private final OrderBook orderBook = new OrderBook();
     private final Deque<BufferedDepthDiff> bufferedEvents = new ArrayDeque<>();
 
-    private final String marketType;
-
     private SymbolStateStatus status = SymbolStateStatus.INIT;
     private boolean trusted = false;
+    // Descriptive metadata, not identity — may be lazily set from incoming event metadata.
     private String base;
     private String quote;
-    private String instrumentId;
     private long localUpdateId = -1;
     private Long previousLocalUpdateId = null;
     private long lastProcessedOffset = -1;
@@ -66,14 +68,15 @@ public class SymbolState {
     private Long lastInputFinalUpdateId;
     private Long lastInputPreviousFinalUpdateId;
 
-    public SymbolState(SymbolKey key) {
+    public SymbolState(InstrumentKey key) {
+        this.instrumentId = key.instrumentId();
         this.symbol = key.symbol();
         this.venue = key.exchange();
         this.marketType = key.marketType();
     }
 
-    public SymbolKey key() {
-        return new SymbolKey(venue, marketType, symbol);
+    public InstrumentKey key() {
+        return new InstrumentKey(instrumentId, venue, marketType, symbol);
     }
 
     public void bufferEvent(BufferedDepthDiff event) {

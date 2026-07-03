@@ -19,7 +19,14 @@ public class KafkaOrderBookL2SnapshotPublisher implements PublishOrderBookL2Snap
     public void publish(OrderBookL2SnapshotDto dto) {
         OrderBookL2SnapshotEvent avro = OrderBookL2SnapshotAvroMapper.toAvro(dto);
         String instrumentId = avro.getMetadata().getInstrumentId();
-        String key = resolveKey(instrumentId, avro.getMetadata().getSymbol());
+        // instrumentId is the only valid output key — no fallback identity mode. A blank id here
+        // means an upstream invariant is broken; skip rather than publish under a wrong key.
+        if (instrumentId == null || instrumentId.isBlank()) {
+            log.error("Skipping publish: OrderBookL2Snapshot instrumentId is blank, symbol={}",
+                    avro.getMetadata().getSymbol());
+            return;
+        }
+        String key = instrumentId;
         long stateSeq = avro.getVersion().getStateSeq();
         long exchangeUpdateId = avro.getVersion().getExchangeUpdateId();
 
@@ -35,11 +42,4 @@ public class KafkaOrderBookL2SnapshotPublisher implements PublishOrderBookL2Snap
         });
     }
 
-    private String resolveKey(String instrumentId, String symbol) {
-        if (instrumentId == null || instrumentId.isBlank()) {
-            log.warn("OrderBookL2Snapshot instrumentId is blank; falling back to symbol={} as Kafka key", symbol);
-            return symbol;
-        }
-        return instrumentId;
-    }
 }

@@ -1,7 +1,7 @@
 package com.trading.mss.service;
 
 import com.trading.mss.domain.model.SyncDecision;
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.common.MetadataDto;
@@ -27,7 +27,7 @@ class BinanceSpotSyncPolicyTest {
 
         @Test
         void noAnchorYet_shouldApply() {
-            SymbolState state = new SymbolState(new SymbolKey("binance", "spot", "BTCUSDT"));
+            SymbolState state = new SymbolState(new InstrumentKey("BINANCE|SPOT|BTC|USDT", "binance", "spot", "BTCUSDT"));
             assertEquals(SyncDecision.APPLY, policy.evaluate(event(100, 105), state));
         }
 
@@ -145,14 +145,14 @@ class BinanceSpotSyncPolicyTest {
     }
 
     private SymbolState stateAt(long localUpdateId) {
-        SymbolState state = new SymbolState(new SymbolKey("binance", "spot", "BTCUSDT"));
+        SymbolState state = new SymbolState(new InstrumentKey("BINANCE|SPOT|BTC|USDT", "binance", "spot", "BTCUSDT"));
         state.setLocalUpdateId(localUpdateId);
         return state;
     }
 
     private DepthDiffDto event(long firstUpdateId, long finalUpdateId) {
         var metadata = new MetadataDto(1, "depthDiff", "binance", "spot",
-                "BTC", "USDT", "BTCUSDT", "BTCUSDT", "evt-1", "stream-1",
+                "BTC", "USDT", "BTCUSDT", "BINANCE|SPOT|BTC|USDT", "evt-1", "stream-1",
                 System.currentTimeMillis(), System.currentTimeMillis(), System.currentTimeMillis());
         return new DepthDiffDto(metadata, System.currentTimeMillis(),
                 firstUpdateId, finalUpdateId, null, List.of(), List.of());

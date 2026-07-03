@@ -1,6 +1,6 @@
 package com.trading.mss.dispatch;
 
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -19,8 +19,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class StripedSerialExecutorTest {
 
-    private static final SymbolKey BTC = new SymbolKey("binance", "spot", "BTCUSDT");
-    private static final SymbolKey ETH = new SymbolKey("binance", "spot", "ETHUSDT");
+    private static final InstrumentKey BTC =
+            new InstrumentKey("BINANCE|SPOT|BTC|USDT", "binance", "spot", "BTCUSDT");
+    private static final InstrumentKey ETH =
+            new InstrumentKey("BINANCE|SPOT|ETH|USDT", "binance", "spot", "ETHUSDT");
 
     private StripedSerialExecutor executor;
 
@@ -66,7 +68,7 @@ class StripedSerialExecutorTest {
     void differentKeysMayRunConcurrentlyOnDifferentStripes() throws Exception {
         int stripes = 16;
         started(stripes, 100);
-        SymbolKey other = keyOnDifferentStripe(BTC, stripes);
+        InstrumentKey other = keyOnDifferentStripe(BTC, stripes);
         CountDownLatch btcEntered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CountDownLatch ethRan = new CountDownLatch(1);
@@ -89,15 +91,34 @@ class StripedSerialExecutorTest {
     }
 
     /** Mirrors StripedSerialExecutor's stripe selection to pick a key off BTC's stripe. */
-    private static SymbolKey keyOnDifferentStripe(SymbolKey reference, int stripes) {
+    private static InstrumentKey keyOnDifferentStripe(InstrumentKey reference, int stripes) {
         int refStripe = Math.floorMod(reference.canonical().hashCode(), stripes);
         for (int i = 0; i < 10_000; i++) {
-            SymbolKey candidate = new SymbolKey("binance", "spot", "SYM" + i + "USDT");
+            InstrumentKey candidate = new InstrumentKey(
+                    "BINANCE|SPOT|SYM" + i + "|USDT", "binance", "spot", "SYM" + i + "USDT");
             if (Math.floorMod(candidate.canonical().hashCode(), stripes) != refStripe) {
                 return candidate;
             }
         }
         throw new IllegalStateException("could not find a key on a different stripe");
+    }
+
+    @Test
+    void stripeSelectionUsesInstrumentIdCanonical_notRoutingAttributes() throws Exception {
+        started(1, 100);
+        // Same instrumentId with different routing attributes must serialize on the same stripe
+        // in submission order — proving the hash input is canonical() (= instrumentId) only.
+        InstrumentKey a = new InstrumentKey("BINANCE|SPOT|BTC|USDT", "binance", "spot", "BTCUSDT");
+        InstrumentKey b = new InstrumentKey("BINANCE|SPOT|BTC|USDT", "BINANCE-ALT", "spot-alt", "XBTUSDT");
+        assertEquals(a.canonical(), b.canonical());
+
+        List<String> order = new ArrayList<>();
+        CountDownLatch done = new CountDownLatch(2);
+        executor.executorFor(a).execute(() -> { order.add("a"); done.countDown(); });
+        executor.executorFor(b).execute(() -> { order.add("b"); done.countDown(); });
+
+        assertTrue(done.await(5, TimeUnit.SECONDS));
+        assertEquals(List.of("a", "b"), order);
     }
 
     @Test

@@ -5,7 +5,7 @@ import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.domain.model.SyncDecision;
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.market.DepthDiffDto;
@@ -66,7 +66,7 @@ public class DepthDiffBootstrapService {
         log.info("SNAPSHOT_FETCH_SUBMITTED: symbol={} depthLimit={} bufferSize={} epoch={}",
                 state.getSymbol(), snapshotDepthLimit, state.getBufferedEvents().size(), epoch);
 
-        SymbolKey key = state.key();
+        InstrumentKey key = state.key();
         // Attached as the LAST statement on purpose: if the future is already complete, the
         // callback command is enqueued (or run) immediately — nothing here may run after it.
         asyncSnapshotPort.fetch(state.getSymbol(), snapshotDepthLimit)
@@ -79,7 +79,7 @@ public class DepthDiffBootstrapService {
      * Runs as a serialized command for {@code key}. Takes the key, not the state: mutable state
      * must not cross the async boundary — it is re-resolved inside the command.
      */
-    void onSnapshotReady(SymbolKey key, long epoch, OrderBookSnapshot snapshot, Throwable error) {
+    void onSnapshotReady(InstrumentKey key, long epoch, OrderBookSnapshot snapshot, Throwable error) {
         SymbolState state = stateStore.loadOrCreate(key);
         try {
             if (epoch != state.getBootstrapEpoch() || state.getStatus() != SymbolStateStatus.SNAPSHOT_LOADING) {

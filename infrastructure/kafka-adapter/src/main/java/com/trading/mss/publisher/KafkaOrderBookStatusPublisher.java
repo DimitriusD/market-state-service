@@ -19,7 +19,14 @@ public class KafkaOrderBookStatusPublisher implements PublishOrderBookStatusPort
     public void publish(OrderBookStatusDto dto) {
         OrderBookStatusEvent avro = OrderBookStatusAvroMapper.toAvro(dto);
         String instrumentId = avro.getMetadata().getInstrumentId();
-        String key = resolveKey(instrumentId, avro.getMetadata().getSymbol());
+        // instrumentId is the only valid output key — no fallback identity mode. A blank id here
+        // means an upstream invariant is broken; skip rather than publish under a wrong key.
+        if (instrumentId == null || instrumentId.isBlank()) {
+            log.error("Skipping publish: OrderBookStatus instrumentId is blank, symbol={}",
+                    avro.getMetadata().getSymbol());
+            return;
+        }
+        String key = instrumentId;
         var lifecycleStatus = avro.getLifecycleStatus();
         var reason = avro.getReason();
 
@@ -35,11 +42,4 @@ public class KafkaOrderBookStatusPublisher implements PublishOrderBookStatusPort
         });
     }
 
-    private String resolveKey(String instrumentId, String symbol) {
-        if (instrumentId == null || instrumentId.isBlank()) {
-            log.warn("OrderBookStatus instrumentId is blank; falling back to symbol={} as Kafka key", symbol);
-            return symbol;
-        }
-        return instrumentId;
-    }
 }

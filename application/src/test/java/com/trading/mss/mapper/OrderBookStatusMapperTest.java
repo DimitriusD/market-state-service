@@ -3,7 +3,7 @@ package com.trading.mss.mapper;
 import com.trading.common.enums.BookSyncStatus;
 import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.ScaledDecimal;
-import com.trading.mss.domain.model.SymbolKey;
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.domain.model.SymbolStateStatus;
 import com.trading.mss.dto.KafkaMessageContext;
@@ -107,10 +107,9 @@ class OrderBookStatusMapperTest {
     }
 
     private static SymbolState baseState() {
-        SymbolState state = new SymbolState(new SymbolKey("binance", "spot", "BTCUSDT"));
+        SymbolState state = new SymbolState(new InstrumentKey("BINANCE|SPOT|BTC|USDT", "binance", "spot", "BTCUSDT"));
         state.setBase("BTC");
         state.setQuote("USDT");
-        state.setInstrumentId("BTCUSDT");
         return state;
     }
 }
