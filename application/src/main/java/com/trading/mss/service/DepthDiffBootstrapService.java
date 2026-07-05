@@ -67,9 +67,7 @@ public class DepthDiffBootstrapService {
                 state.getSymbol(), snapshotDepthLimit, state.getBufferedEvents().size(), epoch);
 
         InstrumentKey key = state.key();
-        // Attached as the LAST statement on purpose: if the future is already complete, the
-        // callback command is enqueued (or run) immediately — nothing here may run after it.
-        asyncSnapshotPort.fetch(state.getSymbol(), snapshotDepthLimit)
+        asyncSnapshotPort.fetch(key, snapshotDepthLimit)
                 .whenCompleteAsync(
                         (snapshot, error) -> onSnapshotReady(key, epoch, snapshot, error),
                         symbolExecutor.executorFor(key));

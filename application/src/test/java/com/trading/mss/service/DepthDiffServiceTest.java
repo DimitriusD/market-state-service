@@ -1136,7 +1136,7 @@ class DepthDiffServiceTest {
         }
 
         @Override
-        public CompletableFuture<OrderBookSnapshot> fetch(String symbol, int depthLimit) {
+        public CompletableFuture<OrderBookSnapshot> fetch(InstrumentKey key, int depthLimit) {
             loadCalls++;
             if (manualCompletion) {
                 CompletableFuture<OrderBookSnapshot> future = new CompletableFuture<>();

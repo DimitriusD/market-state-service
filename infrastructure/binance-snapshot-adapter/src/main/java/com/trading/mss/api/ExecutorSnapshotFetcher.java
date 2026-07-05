@@ -1,5 +1,6 @@
 package com.trading.mss.api;
 
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.port.output.AsyncSnapshotPort;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
@@ -32,23 +33,24 @@ public class ExecutorSnapshotFetcher implements AsyncSnapshotPort {
     }
 
     @Override
-    public CompletableFuture<OrderBookSnapshot> fetch(String symbol, int depthLimit) {
-        return CompletableFuture.supplyAsync(() -> loadWithBackoff(symbol, depthLimit), executor);
+    public CompletableFuture<OrderBookSnapshot> fetch(InstrumentKey key, int depthLimit) {
+        return CompletableFuture.supplyAsync(() -> loadWithBackoff(key, depthLimit), executor);
     }
 
-    private OrderBookSnapshot loadWithBackoff(String symbol, int depthLimit) {
+    private OrderBookSnapshot loadWithBackoff(InstrumentKey key, int depthLimit) {
+        String symbol = key.symbol();
         RuntimeException lastError = null;
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 return snapshotApi.load(symbol, depthLimit);
             } catch (BinanceRateLimitedException | CallNotPermittedException e) {
-                log.warn("Snapshot fetch short-circuited: symbol={} attempt={}/{} reason={}",
-                        symbol, attempt, maxRetries, e.getClass().getSimpleName());
+                log.warn("Snapshot fetch short-circuited: instrumentId={} symbol={} attempt={}/{} reason={}",
+                        key.instrumentId(), symbol, attempt, maxRetries, e.getClass().getSimpleName());
                 throw e;
             } catch (RuntimeException e) {
                 lastError = e;
-                log.warn("Snapshot fetch failed: symbol={} attempt={}/{} error={}",
-                        symbol, attempt, maxRetries, e.getMessage());
+                log.warn("Snapshot fetch failed: instrumentId={} symbol={} attempt={}/{} error={}",
+                        key.instrumentId(), symbol, attempt, maxRetries, e.getMessage());
                 if (attempt < maxRetries) {
                     sleepBackoff(attempt);
                 }

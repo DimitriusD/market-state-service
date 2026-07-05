@@ -23,16 +23,8 @@ import java.util.Map;
 @Configuration
 public class KafkaProducerConfig {
 
-    @Value("${spring.kafka.bootstrap-servers}")
-    private String bootstrapServers;
-
-    @Value("${app.kafka.schema-registry.url:http://localhost:8081}")
-    private String schemaRegistryUrl;
-
-    @Value("${app.kafka.schema-registry.auto-register-schemas:true}")
-    private boolean autoRegisterSchemas;
-
-    private <T> ProducerFactory<String, T> avroProducerFactory() {
+    private <T> ProducerFactory<String, T> avroProducerFactory(
+            String bootstrapServers, String schemaRegistryUrl, boolean autoRegisterSchemas) {
         Map<String, Object> config = new HashMap<>();
         config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -43,8 +35,11 @@ public class KafkaProducerConfig {
     }
 
     @Bean
-    public ProducerFactory<String, OrderBookL2SnapshotEvent> orderBookL2SnapshotAvroProducerFactory() {
-        return avroProducerFactory();
+    public ProducerFactory<String, OrderBookL2SnapshotEvent> orderBookL2SnapshotAvroProducerFactory(
+            @Value("${spring.kafka.bootstrap-servers}") String bootstrapServers,
+            @Value("${app.kafka.schema-registry.url:http://localhost:8081}") String schemaRegistryUrl,
+            @Value("${app.kafka.schema-registry.auto-register-schemas:true}") boolean autoRegisterSchemas) {
+        return avroProducerFactory(bootstrapServers, schemaRegistryUrl, autoRegisterSchemas);
     }
 
     @Bean
@@ -54,8 +49,11 @@ public class KafkaProducerConfig {
     }
 
     @Bean
-    public ProducerFactory<String, OrderBookStatusEvent> orderBookStatusAvroProducerFactory() {
-        return avroProducerFactory();
+    public ProducerFactory<String, OrderBookStatusEvent> orderBookStatusAvroProducerFactory(
+            @Value("${spring.kafka.bootstrap-servers}") String bootstrapServers,
+            @Value("${app.kafka.schema-registry.url:http://localhost:8081}") String schemaRegistryUrl,
+            @Value("${app.kafka.schema-registry.auto-register-schemas:true}") boolean autoRegisterSchemas) {
+        return avroProducerFactory(bootstrapServers, schemaRegistryUrl, autoRegisterSchemas);
     }
 
     @Bean
