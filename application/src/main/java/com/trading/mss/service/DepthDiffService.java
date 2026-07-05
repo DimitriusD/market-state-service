@@ -28,8 +28,6 @@ public class DepthDiffService implements DepthDiffProcessor {
         InstrumentKey key = InstrumentKey.of(metadata);
         SymbolState state = stateStore.loadOrCreate(key);
 
-        // The store is keyed by instrumentId, so a routing-attribute mismatch should be impossible;
-        // if upstream ever violates that, skip the event rather than corrupt the state.
         if (!state.key().equals(key)) {
             log.error("Instrument identity mismatch: stateKey={} eventKey={} eventId={} — skipping event",
                     state.key(), key, metadata.eventId());

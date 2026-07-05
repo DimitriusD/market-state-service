@@ -116,7 +116,6 @@ public class StripedSerialExecutor implements SymbolExecutorPort, SmartLifecycle
         return stripes[Math.floorMod(key.canonical().hashCode(), stripes.length)];
     }
 
-    // --- SmartLifecycle -------------------------------------------------------------------------
 
     @Override
     public void start() {

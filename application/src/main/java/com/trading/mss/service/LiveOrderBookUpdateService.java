@@ -16,7 +16,7 @@ import java.time.Clock;
 @RequiredArgsConstructor
 public class LiveOrderBookUpdateService {
 
-    private final OrderBookApplier orderBookApplier;
+    private final OrderBookStateApplier stateApplier;
     private final BinanceSpotSyncPolicy syncPolicy;
     private final SymbolStateStorePort stateStore;
     private final SymbolStateLifecycleService lifecycleService;
@@ -34,7 +34,7 @@ public class LiveOrderBookUpdateService {
 
     private void handleIgnore(DepthDiffDto event, SymbolState state, KafkaMessageContext ctx) {
         // Duplicate or stale event: count it, but stay quiet — neither snapshot nor status published.
-        state.incrementDuplicateCount();
+        state.getCounters().incrementDuplicate();
         stateStore.save(state);
         log.info("IGNORE: symbol={} localUpdateId={} U={} u={} partition={} offset={} key={}",
                 state.getSymbol(), state.getLocalUpdateId(),
@@ -47,14 +47,15 @@ public class LiveOrderBookUpdateService {
                 state.getSymbol(), state.getLocalUpdateId(),
                 event.firstUpdateId(), event.finalUpdateId(),
                 ctx.partition(), ctx.offset(), ctx.key());
-        state.incrementGapCount();
+        state.getCounters().incrementGap();
         lifecycleService.enterResyncFromLive(event, state, ctx, OrderBookReason.GAP_DETECTED);
     }
 
     private void applyLiveEvent(DepthDiffDto event, SymbolState state, KafkaMessageContext ctx) {
         long prevLocalUpdateId = state.getLocalUpdateId();
-        state.setPreviousLocalUpdateId(prevLocalUpdateId);
-        applyDepthDiffToState(state, event, ctx);
+        stateApplier.applyDiffToState(state, event, ctx);
+        state.setLastAppliedWallTs(clock.millis());
+        stateStore.save(state);
 
         OrderBook book = state.getOrderBook();
         log.info("APPLY: symbol={} venue={} status={} trusted={} "
@@ -77,17 +78,5 @@ public class LiveOrderBookUpdateService {
 
         lifecycleService.clearStaleIfReported(state);
         marketStatePublisher.publishSnapshotIfLive(state, event, ctx);
-    }
-
-    private void applyDepthDiffToState(SymbolState state, DepthDiffDto event, KafkaMessageContext ctx) {
-        var metadata = event.metadataDto();
-        orderBookApplier.applyDiff(state.getOrderBook(), event);
-        state.setLocalUpdateId(event.finalUpdateId());
-        state.setLastEventExchangeTs(metadata.exchangeTs());
-        state.setLastEventReceivedTs(metadata.receivedTs());
-        state.setLastEventProcessedTs(metadata.processedTs());
-        state.setLastAppliedWallTs(clock.millis());
-        state.recordInputContext(event, ctx);
-        stateStore.save(state);
     }
 }

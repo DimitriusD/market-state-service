@@ -1,9 +1,7 @@
 package com.trading.mss.mapper;
 
 import com.trading.contracts.common.MetadataEvent;
-import com.trading.contracts.common.PriceLevelEvent;
 import com.trading.mss.dto.common.MetadataDto;
-import com.trading.mss.dto.common.PriceLevelDto;
 
 public final class MetadataAvroMapper {
 
@@ -24,12 +22,5 @@ public final class MetadataAvroMapper {
                 m.exchangeTs(),
                 m.receivedTs(),
                 m.processedTs());
-    }
-
-    public static PriceLevelEvent toAvro(PriceLevelDto pl) {
-        if (pl == null) {
-            return null;
-        }
-        return new PriceLevelEvent(pl.price(), pl.qty());
     }
 }

@@ -83,6 +83,7 @@ class DepthDiffServiceTest {
 
     private DepthDiffService createService(int maxBufferedEvents) {
         OrderBookApplier orderBookApplier = new OrderBookApplier();
+        OrderBookStateApplier orderBookStateApplier = new OrderBookStateApplier(orderBookApplier);
         BinanceSpotSyncPolicy syncPolicy = new BinanceSpotSyncPolicy();
         SymbolStateLifecycleService lifecycleService = new SymbolStateLifecycleService(
                 stateStore, new OrderBookStatusMapper(clock), statusPublisher, clock);
@@ -93,7 +94,7 @@ class DepthDiffServiceTest {
                 SNAPSHOT_DEPTH_LIMIT
         );
         LiveOrderBookUpdateService liveOrderBookUpdateService = new LiveOrderBookUpdateService(
-                orderBookApplier,
+                orderBookStateApplier,
                 syncPolicy,
                 stateStore,
                 lifecycleService,
@@ -102,6 +103,7 @@ class DepthDiffServiceTest {
         );
         DepthDiffBootstrapService depthDiffBootstrapService = new DepthDiffBootstrapService(
                 orderBookApplier,
+                orderBookStateApplier,
                 syncPolicy,
                 snapshotPort,
                 stateStore,
@@ -210,7 +212,7 @@ class DepthDiffServiceTest {
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
 
             SymbolState state = stateStore.loadOrCreate(KEY);
-            assertNull(state.getFirstBufferedUpdateId());
+            assertNull(state.getBootstrap().getFirstBufferedUpdateId());
         }
 
         @Test
@@ -219,7 +221,7 @@ class DepthDiffServiceTest {
             state.setStatus(SymbolStateStatus.BUFFERING_DIFFS);
             state.bufferEvent(new BufferedDepthDiff(event(100, 100, List.of(), List.of()), ctx(90)));
             state.bufferEvent(new BufferedDepthDiff(event(107, 110, List.of(), List.of()), ctx(91)));
-            state.setFirstBufferedUpdateId(100L);
+            state.getBootstrap().noteFirstBuffered(100L);
             stateStore.save(state);
 
             snapshotPort.setSnapshot(snapshot(105, List.of(), List.of()));
@@ -238,7 +240,7 @@ class DepthDiffServiceTest {
             state.setStatus(SymbolStateStatus.BUFFERING_DIFFS);
             state.bufferEvent(new BufferedDepthDiff(event(100, 101, List.of(), List.of()), ctx(100)));
             state.bufferEvent(new BufferedDepthDiff(event(103, 105, List.of(), List.of()), ctx(101)));
-            state.setFirstBufferedUpdateId(100L);
+            state.getBootstrap().noteFirstBuffered(100L);
             stateStore.save(state);
 
             snapshotPort.setSnapshot(snapshot(100, List.of(), List.of()));
@@ -254,14 +256,14 @@ class DepthDiffServiceTest {
         void bootstrapAlreadyInProgress_buffersOnlyWithoutRestart() {
             SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
-            state.setBootstrapInProgress(true);
+            state.getBootstrap().markAttempt(clock.millis());
             stateStore.save(state);
 
             service.process(event(120, 125, List.of(), List.of()), ctx(1));
 
             SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.SNAPSHOT_LOADING, after.getStatus());
-            assertTrue(after.isBootstrapInProgress());
+            assertTrue(after.getBootstrap().isInProgress());
             assertEquals(1, after.getBufferedEvents().size());
             assertEquals(0, snapshotPort.getLoadCalls());
         }
@@ -272,7 +274,7 @@ class DepthDiffServiceTest {
             state.setStatus(SymbolStateStatus.BUFFERING_DIFFS);
             state.bufferEvent(new BufferedDepthDiff(event(101, 103, List.of(), List.of()), ctx(10)));
             state.bufferEvent(new BufferedDepthDiff(event(104, 105, List.of(), List.of()), ctx(11)));
-            state.setFirstBufferedUpdateId(101L);
+            state.getBootstrap().noteFirstBuffered(101L);
             stateStore.save(state);
 
             snapshotPort.setSnapshot(snapshot(100, List.of(), List.of()));
@@ -281,7 +283,7 @@ class DepthDiffServiceTest {
 
             SymbolState after = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.LIVE, after.getStatus());
-            assertEquals(11, after.getLastProcessedOffset());
+            assertEquals(11, after.getInput().getOffset());
         }
 
         @Test
@@ -290,9 +292,9 @@ class DepthDiffServiceTest {
 
             SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
-            state.setBootstrapInProgress(true);
+            state.getBootstrap().markAttempt(clock.millis());
             state.bufferEvent(new BufferedDepthDiff(event(100, 101, List.of(), List.of()), ctx(1)));
-            state.setFirstBufferedUpdateId(100L);
+            state.getBootstrap().noteFirstBuffered(100L);
             stateStore.save(state);
 
             service.process(event(102, 103, List.of(), List.of()), ctx(2));
@@ -342,7 +344,7 @@ class DepthDiffServiceTest {
             SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(105, state.getLocalUpdateId());
             assertEquals(bidsBefore, state.getOrderBook().getBids().size());
-            assertEquals(1, state.getDuplicateCount());
+            assertEquals(1, state.getCounters().getDuplicateCount());
         }
 
         @Test
@@ -367,8 +369,8 @@ class DepthDiffServiceTest {
             assertEquals(SymbolStateStatus.RESYNCING, lastStatus().lifecycleStatus());
             assertEquals(BookSyncStatus.OUT_OF_SYNC, lastStatus().syncStatus());
             assertFalse(lastStatus().trusted());
-            assertEquals(1, state.getGapCount());
-            assertEquals(1, state.getResyncCount());
+            assertEquals(1, state.getCounters().getGapCount());
+            assertEquals(1, state.getCounters().getResyncCount());
         }
 
         @Test
@@ -509,7 +511,7 @@ class DepthDiffServiceTest {
             service.process(event(98, 105, List.of(), List.of()), ctx(1));
             SymbolState state = stateStore.loadOrCreate(KEY);
             assertEquals(SymbolStateStatus.SNAPSHOT_LOADING, state.getStatus());
-            assertTrue(state.isBootstrapInProgress());
+            assertTrue(state.getBootstrap().isInProgress());
             assertEquals(1, snapshotPort.getLoadCalls());
 
             service.process(event(106, 110, List.of(), List.of()), ctx(2));
@@ -659,7 +661,7 @@ class DepthDiffServiceTest {
             snapshotPort.setSnapshot(null);
             SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.BUFFERING_DIFFS);
-            state.setBootstrapInProgress(true);
+            state.getBootstrap().markAttempt(clock.millis());
             stateStore.save(state);
 
             service.process(event(100, 105, List.of(), List.of()), ctx(1));
@@ -671,7 +673,7 @@ class DepthDiffServiceTest {
         void doesNotPublishSnapshotDuringSnapshotLoading() {
             SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
-            state.setBootstrapInProgress(true);
+            state.getBootstrap().markAttempt(clock.millis());
             stateStore.save(state);
 
             service.process(event(100, 105, List.of(), List.of()), ctx(1));
@@ -683,7 +685,7 @@ class DepthDiffServiceTest {
         void doesNotPublishSnapshotDuringApplyingBuffer() {
             SymbolState state = stateStore.loadOrCreate(KEY);
             state.setStatus(SymbolStateStatus.APPLYING_BUFFER);
-            state.setBootstrapInProgress(true);
+            state.getBootstrap().markAttempt(clock.millis());
             stateStore.save(state);
 
             service.process(event(100, 105, List.of(), List.of()), ctx(1));
@@ -986,7 +988,7 @@ class DepthDiffServiceTest {
         var metadata = new MetadataDto(1, "depthDiff", EXCHANGE, marketType,
                 "BTC", "USDT", SYMBOL, instrumentId, "evt-1", "stream-1",
                 now, now, now);
-        return new DepthDiffDto(metadata, now, firstUpdateId, finalUpdateId, null, bids, asks);
+        return new DepthDiffDto(metadata, firstUpdateId, finalUpdateId, null, bids, asks);
     }
 
     private static OrderBookSnapshot snapshot(long lastUpdateId,

@@ -154,7 +154,7 @@ class BinanceSpotSyncPolicyTest {
         var metadata = new MetadataDto(1, "depthDiff", "binance", "spot",
                 "BTC", "USDT", "BTCUSDT", "BINANCE|SPOT|BTC|USDT", "evt-1", "stream-1",
                 System.currentTimeMillis(), System.currentTimeMillis(), System.currentTimeMillis());
-        return new DepthDiffDto(metadata, System.currentTimeMillis(),
+        return new DepthDiffDto(metadata,
                 firstUpdateId, finalUpdateId, null, List.of(), List.of());
     }
 }

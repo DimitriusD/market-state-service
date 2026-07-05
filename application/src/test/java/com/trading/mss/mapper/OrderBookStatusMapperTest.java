@@ -81,8 +81,8 @@ class OrderBookStatusMapperTest {
         state.setStatus(SymbolStateStatus.RESYNCING);
         state.setLocalUpdateId(105);
         state.setLastSnapshotUpdateId(100);
-        state.incrementGapCount();
-        state.incrementResyncCount();
+        state.getCounters().incrementGap();
+        state.getCounters().incrementResync();
 
         OrderBookStatusDto status = mapper.project(state, OrderBookReason.GAP_DETECTED, null, null, "gap");
 
@@ -96,7 +96,7 @@ class OrderBookStatusMapperTest {
     void usesRecordedInputContextWhenCtxNull() {
         SymbolState state = baseState();
         state.setStatus(SymbolStateStatus.RESYNCING);
-        state.recordInputContext(null,
+        state.getInput().record(null,
                 new KafkaMessageContext("canonical.market.depthdiff.v1", "BTCUSDT", 7, 99));
 
         OrderBookStatusDto status = mapper.project(state, OrderBookReason.GAP_DETECTED, null, null, "gap");

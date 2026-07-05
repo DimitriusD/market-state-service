@@ -11,10 +11,5 @@ public interface SymbolStateStorePort {
 
     void save(SymbolState state);
 
-    /**
-     * Immutable identities of all known symbols. Deliberately does NOT expose the states
-     * themselves: {@code SymbolState} must only be touched from inside that symbol's serialized
-     * commands (see {@link SymbolExecutorPort}); callers iterate keys and submit commands.
-     */
     Collection<InstrumentKey> keys();
 }

@@ -30,6 +30,7 @@ import java.util.concurrent.CompletionException;
 public class DepthDiffBootstrapService {
 
     private final OrderBookApplier orderBookApplier;
+    private final OrderBookStateApplier stateApplier;
     private final BinanceSpotSyncPolicy syncPolicy;
     private final AsyncSnapshotPort asyncSnapshotPort;
     private final SymbolStateStorePort stateStore;
@@ -41,13 +42,13 @@ public class DepthDiffBootstrapService {
     private final long bootstrapCooldownMs;
 
     public void startBootstrapIfNeeded(SymbolState state) {
-        if (state.isBootstrapInProgress()) {
+        if (state.getBootstrap().isInProgress()) {
             stateStore.save(state);
             return;
         }
 
         long now = clock.millis();
-        long sinceLastAttemptMs = now - state.getLastBootstrapAttemptTs();
+        long sinceLastAttemptMs = now - state.getBootstrap().getLastAttemptTs();
         if (sinceLastAttemptMs < bootstrapCooldownMs) {
             log.debug("BOOTSTRAP_COOLDOWN: symbol={} sinceLastAttemptMs={} cooldownMs={} bufferSize={} status={} — continuing to buffer",
                     state.getSymbol(), sinceLastAttemptMs, bootstrapCooldownMs,
@@ -56,11 +57,10 @@ public class DepthDiffBootstrapService {
             return;
         }
 
-        state.setLastBootstrapAttemptTs(now);
-        state.setBootstrapInProgress(true);
+        state.getBootstrap().markAttempt(now);
         state.setStatus(SymbolStateStatus.SNAPSHOT_LOADING);
-        state.incrementSnapshotRetryCount();
-        long epoch = state.incrementBootstrapEpoch();
+        state.getCounters().incrementSnapshotRetry();
+        long epoch = state.getBootstrap().incrementEpoch();
         stateStore.save(state);
 
         log.info("SNAPSHOT_FETCH_SUBMITTED: symbol={} depthLimit={} bufferSize={} epoch={}",
@@ -82,9 +82,9 @@ public class DepthDiffBootstrapService {
     void onSnapshotReady(InstrumentKey key, long epoch, OrderBookSnapshot snapshot, Throwable error) {
         SymbolState state = stateStore.loadOrCreate(key);
         try {
-            if (epoch != state.getBootstrapEpoch() || state.getStatus() != SymbolStateStatus.SNAPSHOT_LOADING) {
+            if (epoch != state.getBootstrap().getEpoch() || state.getStatus() != SymbolStateStatus.SNAPSHOT_LOADING) {
                 log.info("STALE_SNAPSHOT_CALLBACK: symbol={} callbackEpoch={} currentEpoch={} status={} — discarding",
-                        state.getSymbol(), epoch, state.getBootstrapEpoch(), state.getStatus());
+                        state.getSymbol(), epoch, state.getBootstrap().getEpoch(), state.getStatus());
                 return;
             }
 
@@ -112,7 +112,7 @@ public class DepthDiffBootstrapService {
     }
 
     private void applySnapshotAndReplay(SymbolState state, OrderBookSnapshot snapshot) {
-        Long firstBufferedUpdateId = state.getFirstBufferedUpdateId();
+        Long firstBufferedUpdateId = state.getBootstrap().getFirstBufferedUpdateId();
         if (firstBufferedUpdateId != null
                 && syncPolicy.isSnapshotTooOld(snapshot.lastUpdateId(), firstBufferedUpdateId)) {
             log.warn("Snapshot too old: symbol={} snapshotLastUpdateId={} firstBufferedUpdateId={}",
@@ -182,7 +182,7 @@ public class DepthDiffBootstrapService {
 
             switch (decision) {
                 case IGNORE -> {
-                    state.incrementDuplicateCount();
+                    state.getCounters().incrementDuplicate();
                     log.info("BUFFER_REPLAY_IGNORE: symbol={} localUpdateId={} U={} u={}",
                             state.getSymbol(), state.getLocalUpdateId(),
                             bufferedEvent.firstUpdateId(), bufferedEvent.finalUpdateId());
@@ -191,24 +191,13 @@ public class DepthDiffBootstrapService {
                     log.warn("BUFFER_REPLAY_RESYNC: symbol={} localUpdateId={} U={} u={}",
                             state.getSymbol(), state.getLocalUpdateId(),
                             bufferedEvent.firstUpdateId(), bufferedEvent.finalUpdateId());
-                    state.incrementGapCount();
+                    state.getCounters().incrementGap();
                     lifecycleService.enterResyncing(state, OrderBookReason.GAP_DURING_BUFFER_REPLAY, bufferedCtx);
                     return false;
                 }
-                case APPLY -> applyDepthDiffToState(state, bufferedEvent, bufferedCtx);
+                case APPLY -> stateApplier.applyDiffToState(state, bufferedEvent, bufferedCtx);
             }
         }
         return true;
-    }
-
-    private void applyDepthDiffToState(SymbolState state, DepthDiffDto event, KafkaMessageContext ctx) {
-        var metadata = event.metadataDto();
-        state.setPreviousLocalUpdateId(state.getLocalUpdateId());
-        orderBookApplier.applyDiff(state.getOrderBook(), event);
-        state.setLocalUpdateId(event.finalUpdateId());
-        state.setLastEventExchangeTs(metadata.exchangeTs());
-        state.setLastEventReceivedTs(metadata.receivedTs());
-        state.setLastEventProcessedTs(metadata.processedTs());
-        state.recordInputContext(event, ctx);
     }
 }

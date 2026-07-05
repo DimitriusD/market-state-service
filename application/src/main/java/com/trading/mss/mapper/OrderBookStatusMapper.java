@@ -1,6 +1,7 @@
 package com.trading.mss.mapper;
 
 import com.trading.common.enums.BookSyncStatus;
+import com.trading.mss.domain.model.InputPosition;
 import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.ScaledDecimal;
@@ -72,25 +73,26 @@ public class OrderBookStatusMapper {
         long exchangeTs = state.getLastEventExchangeTs();
         long stateAgeMs = exchangeTs > 0 ? now - exchangeTs : -1;
 
+        InputPosition input = state.getInput();
         return new OrderBookStatusDetailsDto(
                 state.getLocalUpdateId(),
                 positiveOrNull(state.getPreviousLocalUpdateId()),
                 state.getLastSnapshotUpdateId(),
-                state.getFirstBufferedUpdateId(),
-                event != null ? Long.valueOf(event.firstUpdateId()) : state.getLastInputFirstUpdateId(),
-                event != null ? Long.valueOf(event.finalUpdateId()) : state.getLastInputFinalUpdateId(),
+                state.getBootstrap().getFirstBufferedUpdateId(),
+                input.firstUpdateIdOr(event),
+                input.finalUpdateIdOr(event),
                 state.getBufferedEvents().size(),
                 bestBid,
                 bestAsk,
-                ctx != null ? ctx.topic() : state.getLastProcessedTopic(),
-                ctx != null ? ctx.key() : state.getLastProcessedKey(),
-                ctx != null ? ctx.partition() : state.getLastProcessedPartition(),
-                ctx != null ? ctx.offset() : state.getLastProcessedOffset(),
+                input.topicOr(ctx),
+                input.keyOr(ctx),
+                input.partitionOr(ctx),
+                input.offsetOr(ctx),
                 stateAgeMs,
-                state.getGapCount(),
-                state.getResyncCount(),
-                state.getDuplicateCount(),
-                state.getSnapshotRetryCount());
+                state.getCounters().getGapCount(),
+                state.getCounters().getResyncCount(),
+                state.getCounters().getDuplicateCount(),
+                state.getCounters().getSnapshotRetryCount());
     }
 
     private BookSyncStatus syncStatusFor(SymbolState state) {

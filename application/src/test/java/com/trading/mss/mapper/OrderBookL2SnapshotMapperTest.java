@@ -192,7 +192,7 @@ class OrderBookL2SnapshotMapperTest {
         var metadata = new MetadataDto(1, "depthDiff", "binance", "spot",
                 "BTC", "USDT", "BTCUSDT", "BTCUSDT", "evt-123", "stream-1",
                 NOW - 50, NOW - 40, NOW - 30);
-        return new DepthDiffDto(metadata, NOW - 50, 106, 110, 104L, List.of(), List.of());
+        return new DepthDiffDto(metadata, 106, 110, 104L, List.of(), List.of());
     }
 
     private static KafkaMessageContext ctx() {

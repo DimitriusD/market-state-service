@@ -45,7 +45,7 @@ public class SymbolTickService {
         switch (state.getStatus()) {
             case RESYNCING -> restartBootstrapIfCooledDown(state, now, true);
             case BUFFERING_DIFFS -> {
-                if (!state.isBootstrapInProgress()) {
+                if (!state.getBootstrap().isInProgress()) {
                     restartBootstrapIfCooledDown(state, now, false);
                 }
             }
@@ -56,7 +56,7 @@ public class SymbolTickService {
     }
 
     private void restartBootstrapIfCooledDown(SymbolState state, long now, boolean resetFirst) {
-        if (now - state.getLastBootstrapAttemptTs() < bootstrapCooldownMs) {
+        if (now - state.getBootstrap().getLastAttemptTs() < bootstrapCooldownMs) {
             return;
         }
         log.info("BOOTSTRAP_FROM_TICK: symbol={} status={} bufferSize={}",
@@ -69,7 +69,7 @@ public class SymbolTickService {
     }
 
     private void checkSnapshotTimeout(SymbolState state, long now) {
-        long inFlightMs = now - state.getLastBootstrapAttemptTs();
+        long inFlightMs = now - state.getBootstrap().getLastAttemptTs();
         if (inFlightMs <= snapshotTimeoutMs) {
             return;
         }

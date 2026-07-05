@@ -7,7 +7,6 @@ import java.util.List;
 
 public record DepthDiffDto(
         MetadataDto metadataDto,
-        Long transactionTs,
         long firstUpdateId,
         long finalUpdateId,
         Long previousFinalUpdateId,

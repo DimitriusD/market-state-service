@@ -4,42 +4,23 @@ import com.trading.contracts.orderbook.OrderBookL2SnapshotEvent;
 import com.trading.mss.dto.orderbook.OrderBookL2SnapshotDto;
 import com.trading.mss.mapper.OrderBookL2SnapshotAvroMapper;
 import com.trading.mss.port.output.PublishOrderBookL2SnapshotPort;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 
-@Slf4j
-@RequiredArgsConstructor
-public class KafkaOrderBookL2SnapshotPublisher implements PublishOrderBookL2SnapshotPort {
+public class KafkaOrderBookL2SnapshotPublisher
+        extends AbstractKafkaEventPublisher<OrderBookL2SnapshotEvent>
+        implements PublishOrderBookL2SnapshotPort {
 
-    private final KafkaTemplate<String, OrderBookL2SnapshotEvent> kafkaTemplate;
-    private final String topic;
+    public KafkaOrderBookL2SnapshotPublisher(
+            KafkaTemplate<String, OrderBookL2SnapshotEvent> kafkaTemplate, String topic) {
+        super(kafkaTemplate, topic, "OrderBookL2Snapshot",
+                a -> a.getMetadata().getInstrumentId(),
+                a -> a.getMetadata().getSymbol(),
+                a -> "stateSeq=" + a.getVersion().getStateSeq()
+                        + " exchangeUpdateId=" + a.getVersion().getExchangeUpdateId());
+    }
 
     @Override
     public void publish(OrderBookL2SnapshotDto dto) {
-        OrderBookL2SnapshotEvent avro = OrderBookL2SnapshotAvroMapper.toAvro(dto);
-        String instrumentId = avro.getMetadata().getInstrumentId();
-        // instrumentId is the only valid output key — no fallback identity mode. A blank id here
-        // means an upstream invariant is broken; skip rather than publish under a wrong key.
-        if (instrumentId == null || instrumentId.isBlank()) {
-            log.error("Skipping publish: OrderBookL2Snapshot instrumentId is blank, symbol={}",
-                    avro.getMetadata().getSymbol());
-            return;
-        }
-        String key = instrumentId;
-        long stateSeq = avro.getVersion().getStateSeq();
-        long exchangeUpdateId = avro.getVersion().getExchangeUpdateId();
-
-        kafkaTemplate.send(topic, key, avro).whenComplete((result, ex) -> {
-            if (ex != null) {
-                log.error("Publish OrderBookL2Snapshot FAILED: topic={} key={} instrumentId={} stateSeq={} exchangeUpdateId={}",
-                        topic, key, instrumentId, stateSeq, exchangeUpdateId, ex);
-            } else {
-                var md = result.getRecordMetadata();
-                log.debug("Published OrderBookL2Snapshot: topic={} key={} partition={} offset={} instrumentId={} stateSeq={} exchangeUpdateId={}",
-                        topic, key, md.partition(), md.offset(), instrumentId, stateSeq, exchangeUpdateId);
-            }
-        });
+        publishEvent(OrderBookL2SnapshotAvroMapper.toAvro(dto));
     }
-
 }

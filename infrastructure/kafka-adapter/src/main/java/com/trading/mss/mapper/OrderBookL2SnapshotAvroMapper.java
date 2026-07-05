@@ -65,8 +65,8 @@ public final class OrderBookL2SnapshotAvroMapper {
             return null;
         }
         return new BboProjectionEvent(
-                MetadataAvroMapper.toAvro(bbo.bestBid()),
-                MetadataAvroMapper.toAvro(bbo.bestAsk()),
+                PriceLevelAvroMapper.toAvro(bbo.bestBid()),
+                PriceLevelAvroMapper.toAvro(bbo.bestAsk()),
                 bbo.spread(),
                 bbo.mid());
     }
@@ -92,6 +92,6 @@ public final class OrderBookL2SnapshotAvroMapper {
         if (levels == null || levels.isEmpty()) {
             return List.of();
         }
-        return levels.stream().map(MetadataAvroMapper::toAvro).toList();
+        return levels.stream().map(PriceLevelAvroMapper::toAvro).toList();
     }
 }

@@ -26,15 +26,15 @@ public class SymbolStateLifecycleService {
     /**
      * Always reached via the snapshot callback command, so there is no "current record" context:
      * the last processed offset is whatever buffer replay recorded via
-     * {@code recordInputContext} (or the previous value/-1 when the buffer was empty — diagnostics
+     * {@code InputPosition.record} (or the previous value/-1 when the buffer was empty — diagnostics
      * only, the status mapper handles it).
      */
     public void enterLiveFromSnapshot(SymbolState state) {
         state.clearBuffer();
-        state.setFirstBufferedUpdateId(null);
+        state.getBootstrap().clearFirstBuffered();
         state.setStatus(SymbolStateStatus.LIVE);
         state.setTrusted(true);
-        state.setBootstrapInProgress(false);
+        state.getBootstrap().markCompleted();
         // Applying the snapshot counts as an apply, otherwise a symbol LIVE'd with no follow-up
         // diff would trip the staleness watchdog immediately.
         state.setLastAppliedWallTs(clock.millis());
@@ -53,8 +53,8 @@ public class SymbolStateLifecycleService {
         SymbolStateStatus prevStatus = state.getStatus();
         state.setStatus(SymbolStateStatus.RESYNCING);
         state.setTrusted(false);
-        state.setBootstrapInProgress(false);
-        state.incrementResyncCount();
+        state.getBootstrap().markCompleted();
+        state.getCounters().incrementResync();
         stateStore.save(state);
 
         log.warn("RESYNC: symbol={} prevStatus={} newStatus=RESYNCING reason={} localUpdateId={} U={} u={} partition={} offset={} key={}",
@@ -69,14 +69,14 @@ public class SymbolStateLifecycleService {
     public void enterResyncing(SymbolState state, OrderBookReason reason, KafkaMessageContext ctx) {
         state.setStatus(SymbolStateStatus.RESYNCING);
         state.setTrusted(false);
-        state.setBootstrapInProgress(false);
-        state.incrementResyncCount();
+        state.getBootstrap().markCompleted();
+        state.getCounters().incrementResync();
         stateStore.save(state);
 
         log.warn("RESYNCING: symbol={} reason={} localUpdateId={} partition={} offset={}",
                 state.getSymbol(), reason, state.getLocalUpdateId(),
-                ctx != null ? ctx.partition() : state.getLastProcessedPartition(),
-                ctx != null ? ctx.offset() : state.getLastProcessedOffset());
+                state.getInput().partitionOr(ctx),
+                state.getInput().offsetOr(ctx));
 
         publishStatus(state, reason, null, ctx, "Entering resync: " + reason);
     }
@@ -86,11 +86,10 @@ public class SymbolStateLifecycleService {
         state.clearBuffer();
         state.setLocalUpdateId(-1);
         state.setPreviousLocalUpdateId(null);
-        state.setFirstBufferedUpdateId(null);
         state.setLastSnapshotUpdateId(-1);
-        state.setBootstrapInProgress(false);
-        // Invalidates any in-flight snapshot fetch: its callback carries the old epoch.
-        state.incrementBootstrapEpoch();
+        // reset() also bumps the epoch, invalidating any in-flight snapshot fetch: its callback
+        // carries the old epoch.
+        state.getBootstrap().reset();
         state.setTrusted(false);
     }
 

@@ -27,7 +27,7 @@ public class SymbolStateWatchdog {
 
     private final AtomicLong droppedTicks = new AtomicLong();
 
-    @Scheduled(fixedDelayString = "${app.state.watchdog.interval-ms:1000}")
+    @Scheduled(fixedDelayString = "${app.state.watchdog.interval-ms}")
     public void tick() {
         for (InstrumentKey key : stateStore.keys()) {
             boolean accepted = symbolExecutor.tryExecute(key, () -> tickService.onTick(key));

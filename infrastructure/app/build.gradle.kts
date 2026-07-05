@@ -18,6 +18,7 @@ dependencies {
 
     annotationProcessor(libs.lombok)
     annotationProcessor(libs.mapstructProcessor)
+    annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
 
     testImplementation(libs.springBootStarterTest)
 

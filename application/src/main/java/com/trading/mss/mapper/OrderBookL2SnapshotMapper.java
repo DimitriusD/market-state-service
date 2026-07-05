@@ -1,6 +1,7 @@
 package com.trading.mss.mapper;
 
 import com.trading.common.enums.BookSyncStatus;
+import com.trading.mss.domain.model.InputPosition;
 import com.trading.mss.domain.model.OrderBook;
 import com.trading.mss.domain.model.OrderBookReason;
 import com.trading.mss.domain.model.ScaledDecimal;
@@ -94,10 +95,10 @@ public class OrderBookL2SnapshotMapper {
                 stateAgeMs,
                 stateAgeMs,  // publishLagMs == stateAgeMs for MVP
                 state.getBufferedEvents().size(),
-                state.getGapCount(),
-                state.getResyncCount(),
-                state.getDuplicateCount(),
-                state.getSnapshotRetryCount());
+                state.getCounters().getGapCount(),
+                state.getCounters().getResyncCount(),
+                state.getCounters().getDuplicateCount(),
+                state.getCounters().getSnapshotRetryCount());
 
         BboProjectionDto bbo = buildBbo(book);
         OrderBookDepthProjectionDto depth = new OrderBookDepthProjectionDto(
@@ -129,21 +130,14 @@ public class OrderBookL2SnapshotMapper {
     }
 
     private OrderBookSourceDto buildSource(SymbolState state, DepthDiffDto triggeringEvent, KafkaMessageContext ctx) {
-        String inputTopic = ctx != null ? ctx.topic() : state.getLastProcessedTopic();
-        String inputKey = ctx != null ? ctx.key() : state.getLastProcessedKey();
-        int inputPartition = ctx != null ? ctx.partition() : state.getLastProcessedPartition();
-        long inputOffset = ctx != null ? ctx.offset() : state.getLastProcessedOffset();
-
+        InputPosition input = state.getInput();
         String upstreamEventId = triggeringEvent != null && triggeringEvent.metadataDto() != null
                 ? triggeringEvent.metadataDto().eventId() : null;
-        Long inputFirstUpdateId = triggeringEvent != null
-                ? Long.valueOf(triggeringEvent.firstUpdateId()) : state.getLastInputFirstUpdateId();
-        Long inputFinalUpdateId = triggeringEvent != null
-                ? Long.valueOf(triggeringEvent.finalUpdateId()) : state.getLastInputFinalUpdateId();
 
         return new OrderBookSourceDto(
-                inputTopic, inputKey, inputPartition, inputOffset,
-                upstreamEventId, inputFirstUpdateId, inputFinalUpdateId);
+                input.topicOr(ctx), input.keyOr(ctx), input.partitionOr(ctx), input.offsetOr(ctx),
+                upstreamEventId,
+                input.firstUpdateIdOr(triggeringEvent), input.finalUpdateIdOr(triggeringEvent));
     }
 
     private List<PriceLevelDto> projectLevels(NavigableMap<Long, Long> side, int publishedDepth) {
