@@ -1,9 +1,10 @@
 package com.trading.mss.service;
 
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.SymbolState;
 import com.trading.mss.dto.market.DepthDiffDto;
 import com.trading.mss.dto.KafkaMessageContext;
-import com.trading.mss.port.input.ProcessDepthDiffUseCase;
+import com.trading.mss.port.input.DepthDiffProcessor;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import com.trading.mss.service.handler.DepthDiffStateHandlerRegistry;
 import lombok.RequiredArgsConstructor;
@@ -11,7 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @RequiredArgsConstructor
-public class ProcessDepthDiffService implements ProcessDepthDiffUseCase {
+public class DepthDiffService implements DepthDiffProcessor {
 
     private final SymbolStateStorePort stateStore;
     private final DepthDiffStateHandlerRegistry handlerRegistry;
@@ -24,12 +25,19 @@ public class ProcessDepthDiffService implements ProcessDepthDiffUseCase {
         }
 
         var metadata = event.metadataDto();
-        SymbolState state = stateStore.loadOrCreate(metadata.symbol(), metadata.exchange());
+        InstrumentKey key = InstrumentKey.of(metadata);
+        SymbolState state = stateStore.loadOrCreate(key);
 
-        if (state.getMarketType() == null) {
-            state.setMarketType(metadata.marketType());
-            state.setInstrumentId(metadata.instrumentId());
+        if (!state.key().equals(key)) {
+            log.error("Instrument identity mismatch: stateKey={} eventKey={} eventId={} — skipping event",
+                    state.key(), key, metadata.eventId());
+            return;
+        }
+
+        if (state.getBase() == null) {
             state.setBase(metadata.base());
+        }
+        if (state.getQuote() == null) {
             state.setQuote(metadata.quote());
         }
 

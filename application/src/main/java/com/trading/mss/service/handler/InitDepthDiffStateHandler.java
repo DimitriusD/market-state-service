@@ -25,6 +25,6 @@ public class InitDepthDiffStateHandler implements DepthDiffStateHandler {
         if (!bufferService.bufferEvent(state, event, context)) {
             return;
         }
-        bootstrapService.startBootstrapIfNeeded(state, context);
+        bootstrapService.startBootstrapIfNeeded(state);
     }
 }

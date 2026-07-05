@@ -1,5 +1,6 @@
 package com.trading.mss.api;
 
+import com.trading.mss.domain.model.InstrumentKey;
 import com.trading.mss.domain.model.OrderBookSnapshot;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ExecutorSnapshotFetcherTest {
 
     private static final Executor DIRECT = Runnable::run;
+    private static final InstrumentKey KEY = new InstrumentKey("BINANCE|SPOT|BTC|USDT", "binance", "spot", "BTCUSDT");
 
     @Test
     void retriesTransientFailures_thenSucceeds() {
@@ -24,7 +26,7 @@ class ExecutorSnapshotFetcherTest {
         api.snapshot = snapshot();
         var fetcher = new ExecutorSnapshotFetcher(api, DIRECT, 3, 0, 0);
 
-        OrderBookSnapshot result = fetcher.fetch("BTCUSDT", 1000).join();
+        OrderBookSnapshot result = fetcher.fetch(KEY, 1000).join();
 
         assertNotNull(result);
         assertEquals(3, api.calls);
@@ -36,7 +38,7 @@ class ExecutorSnapshotFetcherTest {
         api.failTimes(Integer.MAX_VALUE, new RuntimeException("down"));
         var fetcher = new ExecutorSnapshotFetcher(api, DIRECT, 3, 0, 0);
 
-        CompletableFuture<OrderBookSnapshot> future = fetcher.fetch("BTCUSDT", 1000);
+        CompletableFuture<OrderBookSnapshot> future = fetcher.fetch(KEY, 1000);
 
         assertTrue(future.isCompletedExceptionally());
         assertEquals(3, api.calls);
@@ -48,7 +50,7 @@ class ExecutorSnapshotFetcherTest {
         api.failTimes(Integer.MAX_VALUE, new BinanceRateLimitedException(429, Duration.ofSeconds(5)));
         var fetcher = new ExecutorSnapshotFetcher(api, DIRECT, 3, 0, 0);
 
-        CompletableFuture<OrderBookSnapshot> future = fetcher.fetch("BTCUSDT", 1000);
+        CompletableFuture<OrderBookSnapshot> future = fetcher.fetch(KEY, 1000);
 
         assertTrue(future.isCompletedExceptionally());
         assertEquals(1, api.calls);

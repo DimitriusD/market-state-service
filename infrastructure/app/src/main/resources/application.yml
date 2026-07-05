@@ -15,21 +15,17 @@ app:
     schema-registry:
       url: ${APP_SCHEMA_REGISTRY_URL:http://localhost:8081}
       auto-register-schemas: ${APP_SCHEMA_REGISTRY_AUTO_REGISTER:true}
-    topic:
-      depth-diff: ${APP_KAFKA_TOPIC_DEPTH_DIFF:canonical.market.depthdiff.v1}
     topics:
-      bbo-state: ${APP_KAFKA_TOPICS_BBO_STATE:state.bbo.v1}
-      orderbook-topn-state: ${APP_KAFKA_TOPICS_ORDERBOOK_TOPN_STATE:state.orderbook.l2.topn.v1}
+      depth-diff: ${APP_KAFKA_TOPICS_DEPTH_DIFF:canonical.market.depthdiff.v1}
+      orderbook-l2-snapshot: ${APP_KAFKA_TOPICS_ORDERBOOK_L2_SNAPSHOT:market.state.orderbook.l2.snapshot.v1}
+      orderbook-status: ${APP_KAFKA_TOPICS_ORDERBOOK_STATUS:market.state.orderbook.status.v1}
   binance:
     rest:
       base-url: ${APP_BINANCE_REST_BASE_URL:https://api.binance.com}
       connect-timeout-ms: ${APP_BINANCE_REST_CONNECT_TIMEOUT_MS:3000}
       read-timeout-ms: ${APP_BINANCE_REST_READ_TIMEOUT_MS:5000}
       resilience:
-        # Token-bucket budget shared across all symbols (Binance limits ~6000 weight/min per IP;
-        # a depth(limit=1000) request is ~50 weight ⇒ ~120 req/min ceiling, 100 leaves headroom).
         rate-limit-per-minute: ${APP_BINANCE_RATE_LIMIT_PER_MINUTE:100}
-        # 0 = fail fast, never block the consumer thread waiting for a permit.
         rate-limit-timeout-ms: ${APP_BINANCE_RATE_LIMIT_TIMEOUT_MS:0}
         circuit-failure-rate-threshold: ${APP_BINANCE_CIRCUIT_FAILURE_RATE_THRESHOLD:50}
         circuit-sliding-window-size: ${APP_BINANCE_CIRCUIT_SLIDING_WINDOW_SIZE:10}
@@ -40,13 +36,25 @@ app:
       depth-limit: ${APP_BINANCE_SNAPSHOT_DEPTH_LIMIT:1000}
   state:
     max-buffered-events: ${APP_STATE_MAX_BUFFERED_EVENTS:10000}
-    # Per-symbol minimum interval between bootstrap attempts. Breaks the "every diff restarts
-    # bootstrap" resync storm; the service keeps buffering during the cooldown.
     bootstrap-cooldown-ms: ${APP_STATE_BOOTSTRAP_COOLDOWN_MS:5000}
+    # SNAPSHOT_LOADING watchdog: must exceed the fetch worst case
+    # (max-retries x (connect + read + 1.5 x max-backoff), ~30s with defaults).
+    snapshot-timeout-ms: ${APP_STATE_SNAPSHOT_TIMEOUT_MS:60000}
+    staleness:
+      # Soft: publish STALE_STATE status, trusted unchanged (silence may be a quiet market).
+      soft-threshold-ms: ${APP_STATE_STALENESS_SOFT_THRESHOLD_MS:30000}
+      # Hard: full resync; with a dead stream this degrades into controlled REST polling.
+      hard-threshold-ms: ${APP_STATE_STALENESS_HARD_THRESHOLD_MS:120000}
+    watchdog:
+      interval-ms: ${APP_STATE_WATCHDOG_INTERVAL_MS:1000}
+    dispatcher:
+      # 1 = deterministic global event loop; use 4-8 for 100+ active symbols
+      # (with 1 stripe a slow symbol delays all others).
+      stripes: ${APP_STATE_DISPATCHER_STRIPES:1}
+      # Per-stripe bounded queue; a full queue blocks the Kafka listener (backpressure).
+      queue-capacity: ${APP_STATE_DISPATCHER_QUEUE_CAPACITY:10000}
   bootstrap:
-    # Snapshot loads run on this pool, off the Kafka consumer thread, so HTTP never blocks poll().
     snapshot-fetch-pool-size: ${APP_BOOTSTRAP_SNAPSHOT_FETCH_POOL_SIZE:4}
-    # Transient-failure retries live in the fetcher (sleeping there is safe); exhaustion → resync.
     snapshot-fetch-max-retries: ${APP_BOOTSTRAP_SNAPSHOT_FETCH_MAX_RETRIES:3}
     snapshot-fetch-base-backoff-ms: ${APP_BOOTSTRAP_SNAPSHOT_FETCH_BASE_BACKOFF_MS:200}
     snapshot-fetch-max-backoff-ms: ${APP_BOOTSTRAP_SNAPSHOT_FETCH_MAX_BACKOFF_MS:2000}

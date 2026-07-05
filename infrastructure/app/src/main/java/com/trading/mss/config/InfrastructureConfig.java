@@ -7,18 +7,23 @@ import com.trading.mss.api.BinanceResilienceConfig;
 import com.trading.mss.api.BinanceSpotSnapshotApiServiceImpl;
 import com.trading.mss.api.ExecutorSnapshotFetcher;
 import com.trading.mss.api.ResilientBinanceSnapshotApiService;
-import com.trading.mss.mapper.BboStateMapper;
-import com.trading.mss.mapper.OrderBookDepthStateMapper;
-import com.trading.mss.port.input.ProcessDepthDiffUseCase;
+import com.trading.mss.dispatch.StripedSerialExecutor;
+import com.trading.mss.mapper.OrderBookL2SnapshotMapper;
+import com.trading.mss.mapper.OrderBookStatusMapper;
+import com.trading.mss.port.input.DepthDiffProcessor;
 import com.trading.mss.port.output.AsyncSnapshotPort;
 import com.trading.mss.port.output.BinanceSpotSnapshotApiService;
-import com.trading.mss.port.output.PublishBboStatePort;
-import com.trading.mss.port.output.PublishOrderBookDepthStatePort;
+import com.trading.mss.port.output.PublishOrderBookL2SnapshotPort;
+import com.trading.mss.port.output.PublishOrderBookStatusPort;
 import com.trading.mss.port.output.SymbolStateStorePort;
 import com.trading.mss.service.*;
 import com.trading.mss.service.handler.*;
 import com.trading.mss.store.InMemorySymbolStateStore;
-import org.springframework.beans.factory.annotation.Value;
+import com.trading.mss.watchdog.SymbolStateWatchdog;
+import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.web.client.ClientHttpRequestFactories;
 import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.context.annotation.Bean;
@@ -33,7 +38,27 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Configuration
+@EnableConfigurationProperties(AppProperties.class)
 public class InfrastructureConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(InfrastructureConfig.class);
+
+    private final AppProperties props;
+
+    public InfrastructureConfig(AppProperties props) {
+        this.props = props;
+    }
+
+    @PostConstruct
+    void validateConfig() {
+        // A too-low timeout double-fires against a slow-but-alive fetch: the epoch guard keeps that
+        // correct, but it wastes rate-limit budget and emits spurious SNAPSHOT_LOAD_FAILED statuses.
+        if (props.snapshotTimeoutBelowFetchWorstCase()) {
+            log.warn("app.state.snapshot-timeout-ms={} is below the fetch worst case ~{}ms "
+                            + "(maxRetries x (connect + read + 1.5 x maxBackoff)) — expect spurious snapshot timeouts",
+                    props.state().snapshotTimeoutMs(), props.snapshotFetchWorstCaseMs());
+        }
+    }
 
     @Bean
     public Clock clock() {
@@ -53,9 +78,26 @@ public class InfrastructureConfig {
         return new InMemorySymbolStateStore();
     }
 
+    /**
+     * Serialization point for all symbol-state mutations. Registered as a bean so its
+     * SmartLifecycle stop (phase 0) runs AFTER the Kafka listener containers stop.
+     * stripes=1 is a deterministic global event loop; raise to 4-8 for 100+ active symbols
+     * (one slow symbol otherwise delays all others).
+     */
+    @Bean
+    public StripedSerialExecutor symbolExecutor() {
+        AppProperties.State.Dispatcher dispatcher = props.state().dispatcher();
+        return new StripedSerialExecutor(dispatcher.stripes(), dispatcher.queueCapacity());
+    }
+
     @Bean
     public OrderBookApplier orderBookApplier() {
         return new OrderBookApplier();
+    }
+
+    @Bean
+    public OrderBookStateApplier orderBookStateApplier(OrderBookApplier orderBookApplier) {
+        return new OrderBookStateApplier(orderBookApplier);
     }
 
     @Bean
@@ -64,56 +106,46 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public BboStateMapper bboStateMapper() {
-        return new BboStateMapper();
+    public OrderBookL2SnapshotMapper orderBookL2SnapshotMapper(Clock clock) {
+        return new OrderBookL2SnapshotMapper(clock);
     }
 
     @Bean
-    public OrderBookDepthStateMapper orderBookDepthStateMapper() {
-        return new OrderBookDepthStateMapper();
+    public OrderBookStatusMapper orderBookStatusMapper(Clock clock) {
+        return new OrderBookStatusMapper(clock);
     }
 
     @Bean
-    public RestClient binanceRestClient(
-            @Value("${app.binance.rest.base-url:https://api.binance.com}") String baseUrl,
-            @Value("${app.binance.rest.connect-timeout-ms:3000}") long connectTimeoutMs,
-            @Value("${app.binance.rest.read-timeout-ms:5000}") long readTimeoutMs) {
+    public RestClient binanceRestClient() {
+        AppProperties.Binance.Rest rest = props.binance().rest();
         ClientHttpRequestFactorySettings settings = ClientHttpRequestFactorySettings.DEFAULTS
-                .withConnectTimeout(Duration.ofMillis(connectTimeoutMs))
-                .withReadTimeout(Duration.ofMillis(readTimeoutMs));
+                .withConnectTimeout(Duration.ofMillis(rest.connectTimeoutMs()))
+                .withReadTimeout(Duration.ofMillis(rest.readTimeoutMs()));
         return RestClient.builder()
-                .baseUrl(baseUrl)
+                .baseUrl(rest.baseUrl())
                 .requestFactory(ClientHttpRequestFactories.get(settings))
                 .build();
     }
 
     @Bean
-    public BinanceSpotSnapshotApiService snapshotPort(
-            RestClient binanceRestClient,
-            Clock clock,
-            @Value("${app.binance.rest.resilience.rate-limit-per-minute:100}") int rateLimitPerMinute,
-            @Value("${app.binance.rest.resilience.rate-limit-timeout-ms:0}") long rateLimitTimeoutMs,
-            @Value("${app.binance.rest.resilience.circuit-failure-rate-threshold:50}") float circuitFailureRateThreshold,
-            @Value("${app.binance.rest.resilience.circuit-sliding-window-size:10}") int circuitSlidingWindowSize,
-            @Value("${app.binance.rest.resilience.circuit-minimum-calls:5}") int circuitMinimumCalls,
-            @Value("${app.binance.rest.resilience.circuit-wait-duration-ms:30000}") long circuitWaitDurationMs,
-            @Value("${app.binance.rest.resilience.circuit-permitted-calls-half-open:2}") int circuitPermittedCallsHalfOpen) {
+    public BinanceSpotSnapshotApiService snapshotPort(RestClient binanceRestClient, Clock clock) {
+        AppProperties.Binance.Rest.Resilience resilience = props.binance().rest().resilience();
         BinanceSpotSnapshotApiService httpClient = new BinanceSpotSnapshotApiServiceImpl(binanceRestClient);
         BinanceResilienceConfig resilienceConfig = new BinanceResilienceConfig(
-                rateLimitPerMinute,
+                resilience.rateLimitPerMinute(),
                 Duration.ofMinutes(1),
-                Duration.ofMillis(rateLimitTimeoutMs),
-                circuitFailureRateThreshold,
-                circuitSlidingWindowSize,
-                circuitMinimumCalls,
-                Duration.ofMillis(circuitWaitDurationMs),
-                circuitPermittedCallsHalfOpen);
+                Duration.ofMillis(resilience.rateLimitTimeoutMs()),
+                resilience.circuitFailureRateThreshold(),
+                resilience.circuitSlidingWindowSize(),
+                resilience.circuitMinimumCalls(),
+                Duration.ofMillis(resilience.circuitWaitDurationMs()),
+                resilience.circuitPermittedCallsHalfOpen());
         return new ResilientBinanceSnapshotApiService(httpClient, clock, resilienceConfig);
     }
 
     @Bean
-    public ExecutorService snapshotFetchExecutor(
-            @Value("${app.bootstrap.snapshot-fetch-pool-size:4}") int poolSize) {
+    public ExecutorService snapshotFetchExecutor() {
+        int poolSize = props.bootstrap().snapshotFetchPoolSize();
         ThreadFactory threadFactory = new ThreadFactory() {
             private final AtomicInteger counter = new AtomicInteger();
 
@@ -130,76 +162,83 @@ public class InfrastructureConfig {
     @Bean
     public AsyncSnapshotPort asyncSnapshotPort(
             BinanceSpotSnapshotApiService snapshotPort,
-            ExecutorService snapshotFetchExecutor,
-            @Value("${app.bootstrap.snapshot-fetch-max-retries:3}") int maxRetries,
-            @Value("${app.bootstrap.snapshot-fetch-base-backoff-ms:200}") long baseBackoffMs,
-            @Value("${app.bootstrap.snapshot-fetch-max-backoff-ms:2000}") long maxBackoffMs) {
-        return new ExecutorSnapshotFetcher(snapshotPort, snapshotFetchExecutor, maxRetries, baseBackoffMs, maxBackoffMs);
+            ExecutorService snapshotFetchExecutor) {
+        AppProperties.Bootstrap bootstrap = props.bootstrap();
+        return new ExecutorSnapshotFetcher(
+                snapshotPort,
+                snapshotFetchExecutor,
+                bootstrap.snapshotFetchMaxRetries(),
+                bootstrap.snapshotFetchBaseBackoffMs(),
+                bootstrap.snapshotFetchMaxBackoffMs());
     }
 
     @Bean
-    public SymbolStateLifecycleService symbolStateLifecycleService(SymbolStateStorePort symbolStateStore) {
-        return new SymbolStateLifecycleService(symbolStateStore);
+    public SymbolStateLifecycleService symbolStateLifecycleService(
+            SymbolStateStorePort symbolStateStore,
+            OrderBookStatusMapper orderBookStatusMapper,
+            PublishOrderBookStatusPort publishOrderBookStatusPort,
+            Clock clock) {
+        return new SymbolStateLifecycleService(
+                symbolStateStore, orderBookStatusMapper, publishOrderBookStatusPort, clock);
     }
 
     @Bean
     public MarketStatePublisher marketStatePublisher(
-            BboStateMapper bboStateMapper,
-            OrderBookDepthStateMapper orderBookDepthStateMapper,
-            PublishBboStatePort publishBboStatePort,
-            PublishOrderBookDepthStatePort publishOrderBookDepthStatePort,
-            @Value("${app.market-state.publish.topn-depth:10}") int publishedLevels) {
+            OrderBookL2SnapshotMapper orderBookL2SnapshotMapper,
+            PublishOrderBookL2SnapshotPort publishOrderBookL2SnapshotPort) {
         return new MarketStatePublisher(
-                bboStateMapper,
-                orderBookDepthStateMapper,
-                publishBboStatePort,
-                publishOrderBookDepthStatePort,
-                publishedLevels);
+                orderBookL2SnapshotMapper,
+                publishOrderBookL2SnapshotPort,
+                props.marketState().publish().topnDepth(),
+                props.binance().snapshot().depthLimit());
     }
 
     @Bean
     public LiveOrderBookUpdateService liveOrderBookUpdateService(
-            OrderBookApplier orderBookApplier,
+            OrderBookStateApplier orderBookStateApplier,
             BinanceSpotSyncPolicy syncPolicy,
             SymbolStateStorePort symbolStateStore,
             SymbolStateLifecycleService symbolStateLifecycleService,
-            MarketStatePublisher marketStatePublisher) {
+            MarketStatePublisher marketStatePublisher,
+            Clock clock) {
         return new LiveOrderBookUpdateService(
-                orderBookApplier,
+                orderBookStateApplier,
                 syncPolicy,
                 symbolStateStore,
                 symbolStateLifecycleService,
-                marketStatePublisher);
+                marketStatePublisher,
+                clock);
     }
 
     @Bean
     public DepthDiffBootstrapService depthDiffBootstrapService(
             SymbolStateStorePort symbolStateStore,
             OrderBookApplier orderBookApplier,
+            OrderBookStateApplier orderBookStateApplier,
             BinanceSpotSyncPolicy syncPolicy,
             AsyncSnapshotPort asyncSnapshotPort,
             SymbolStateLifecycleService symbolStateLifecycleService,
             MarketStatePublisher marketStatePublisher,
-            Clock clock,
-            @Value("${app.binance.snapshot.depth-limit:1000}") int snapshotDepthLimit,
-            @Value("${app.state.bootstrap-cooldown-ms:5000}") long bootstrapCooldownMs) {
+            StripedSerialExecutor symbolExecutor,
+            Clock clock) {
         return new DepthDiffBootstrapService(
                 orderBookApplier,
+                orderBookStateApplier,
                 syncPolicy,
                 asyncSnapshotPort,
                 symbolStateStore,
                 symbolStateLifecycleService,
                 marketStatePublisher,
-                snapshotDepthLimit,
+                symbolExecutor,
+                props.binance().snapshot().depthLimit(),
                 clock,
-                bootstrapCooldownMs);
+                props.state().bootstrapCooldownMs());
     }
 
     @Bean
     public DepthDiffBufferService depthDiffBufferService(
-            SymbolStateLifecycleService symbolStateLifecycleService,
-            @Value("${app.state.max-buffered-events:10000}") int maxBufferedEvents) {
-        return new DepthDiffBufferService(symbolStateLifecycleService, maxBufferedEvents);
+            SymbolStateLifecycleService symbolStateLifecycleService) {
+        return new DepthDiffBufferService(symbolStateLifecycleService, props.state().maxBufferedEvents());
     }
 
     @Bean
@@ -210,7 +249,7 @@ public class InfrastructureConfig {
             SymbolStateLifecycleService symbolStateLifecycleService,
             SymbolStateStorePort symbolStateStore) {
         BootstrapPhaseStateHandler bootstrapPhaseHandler =
-                new BootstrapPhaseStateHandler(depthDiffBufferService, depthDiffBootstrapService, symbolStateStore);
+                new BootstrapPhaseStateHandler(depthDiffBufferService, symbolStateStore);
 
         DepthDiffStateHandlerRegistry registry = new DepthDiffStateHandlerRegistry(java.util.List.of(
                 new InitDepthDiffStateHandler(depthDiffBufferService, depthDiffBootstrapService),
@@ -225,9 +264,35 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public ProcessDepthDiffUseCase processDepthDiff(
+    public DepthDiffProcessor processDepthDiff(
             SymbolStateStorePort symbolStateStore,
             DepthDiffStateHandlerRegistry depthDiffStateHandlerRegistry) {
-        return new ProcessDepthDiffService(symbolStateStore, depthDiffStateHandlerRegistry);
+        return new DepthDiffService(symbolStateStore, depthDiffStateHandlerRegistry);
+    }
+
+    @Bean
+    public SymbolTickService symbolTickService(
+            SymbolStateStorePort symbolStateStore,
+            DepthDiffBootstrapService depthDiffBootstrapService,
+            SymbolStateLifecycleService symbolStateLifecycleService,
+            Clock clock) {
+        AppProperties.State state = props.state();
+        return new SymbolTickService(
+                symbolStateStore,
+                depthDiffBootstrapService,
+                symbolStateLifecycleService,
+                clock,
+                state.bootstrapCooldownMs(),
+                state.snapshotTimeoutMs(),
+                state.staleness().softThresholdMs(),
+                state.staleness().hardThresholdMs());
+    }
+
+    @Bean
+    public SymbolStateWatchdog symbolStateWatchdog(
+            SymbolStateStorePort symbolStateStore,
+            StripedSerialExecutor symbolExecutor,
+            SymbolTickService symbolTickService) {
+        return new SymbolStateWatchdog(symbolStateStore, symbolExecutor, symbolTickService);
     }
 }

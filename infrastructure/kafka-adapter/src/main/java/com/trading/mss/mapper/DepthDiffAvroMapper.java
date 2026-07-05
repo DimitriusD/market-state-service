@@ -33,7 +33,6 @@ public final class DepthDiffAvroMapper {
 
         return new DepthDiffDto(
                 metadata,
-                avro.getTransactionTs(),
                 avro.getFirstUpdateId(),
                 avro.getFinalUpdateId(),
                 avro.getPreviousFinalUpdateId(),

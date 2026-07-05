@@ -150,7 +150,7 @@ class OrderBookApplierTest {
 
     @Test
     void handlesNullBidsAndAsks() {
-        var event = new DepthDiffDto(dummyMetadata(), null, 1, 2, null, null, null);
+        var event = new DepthDiffDto(dummyMetadata(), 1, 2, null, null, null);
         applier.applyDiff(book, event);
 
         assertTrue(book.getBids().isEmpty());
@@ -224,7 +224,7 @@ class OrderBookApplierTest {
     }
 
     private static DepthDiffDto diff(List<PriceLevelDto> bids, List<PriceLevelDto> asks) {
-        return new DepthDiffDto(dummyMetadata(), null, 1, 2, null, bids, asks);
+        return new DepthDiffDto(dummyMetadata(), 1, 2, null, bids, asks);
     }
 
     private static MetadataDto dummyMetadata() {
